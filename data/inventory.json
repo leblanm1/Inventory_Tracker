@@ -1,4 +1,12 @@
 {
+  "users": [
+    "Marc-Andre",
+    "Casper",
+    "Marcelo",
+    "Austin",
+    "Tung",
+    "Damian"
+  ],
   "storageUnits": [
     {
       "id": "store-1",
@@ -151322,6 +151330,13 @@
     }
   ],
   "auditLogs": [
+    {
+      "id": "log-1782413828081-tayv",
+      "timestamp": "2026-06-25T18:57:08.080Z",
+      "user": "Dr. Aris (Lab Director)",
+      "action": "Users Updated",
+      "description": "Updated users list to 6 member(s)."
+    },
     {
       "id": "log-1782413390991-nqhe",
       "timestamp": "2026-06-25T18:49:50.991Z",

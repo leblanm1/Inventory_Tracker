@@ -592,27 +592,121 @@ export default function App() {
     }
   };
 
-  // Universal Filter / Search logic
-  const filteredSamples = useMemo(() => {
-    const query = searchQuery.toLowerCase().trim();
-    if (!query) return state.samples.filter(s => !s.isArchived);
+  type SearchResult =
+    | { kind: "sample"; sample: Sample }
+    | { kind: "storage"; storage: StorageUnit }
+    | { kind: "shelf"; shelf: Shelf; storage?: StorageUnit }
+    | { kind: "rack"; rack: Rack; shelf?: Shelf; storage?: StorageUnit }
+    | { kind: "drawer"; drawer: Drawer; rack?: Rack; shelf?: Shelf; storage?: StorageUnit }
+    | { kind: "box"; box: Box; drawer?: Drawer; rack?: Rack; shelf?: Shelf; storage?: StorageUnit };
 
-    return state.samples.filter(s => {
-      if (s.isArchived) return false;
-      return (
-        s.chemicalName.toLowerCase().includes(query) ||
-        s.casNumber.toLowerCase().includes(query) ||
-        s.itemType.toLowerCase().includes(query) ||
-        s.notes.toLowerCase().includes(query) ||
-        s.plasmidName.toLowerCase().includes(query) ||
-        s.organism.toLowerCase().includes(query) ||
-        s.gene.toLowerCase().includes(query) ||
-        s.primaryDepositedBy.toLowerCase().includes(query) ||
-        s.catalogNum.toLowerCase().includes(query) ||
-        s.lot.toLowerCase().includes(query)
-      );
-    });
-  }, [state.samples, searchQuery]);
+  // Universal Filter / Search logic
+  const searchResults = useMemo<SearchResult[]>(() => {
+    const query = searchQuery.toLowerCase().trim();
+    if (!query) return [];
+
+    const lowerIncludes = (...values: Array<string | undefined | null>) =>
+      values.some((v) => (v || "").toLowerCase().includes(query));
+
+    const sampleMatches: SearchResult[] = state.samples
+      .filter(s => {
+        if (s.isArchived) return false;
+        return lowerIncludes(
+          s.chemicalName,
+          s.casNumber,
+          s.itemType,
+          s.notes,
+          s.plasmidName,
+          s.organism,
+          s.gene,
+          s.primaryDepositedBy,
+          s.catalogNum,
+          s.lot
+        );
+      })
+      .map(sample => ({ kind: "sample", sample }));
+
+    const storageMatches: SearchResult[] = state.storageUnits
+      .filter(storage => !storage.isArchived && lowerIncludes(storage.name, storage.type))
+      .map(storage => ({ kind: "storage", storage }));
+
+    const shelfMatches: SearchResult[] = state.shelves
+      .filter(shelf => {
+        if (shelf.isArchived) return false;
+        const storage = state.storageUnits.find(u => u.id === shelf.storageId);
+        return lowerIncludes(shelf.name, storage?.name);
+      })
+      .map(shelf => ({
+        kind: "shelf",
+        shelf,
+        storage: state.storageUnits.find(u => u.id === shelf.storageId)
+      }));
+
+    const rackMatches: SearchResult[] = state.racks
+      .filter(rack => {
+        if (rack.isArchived) return false;
+        const shelf = state.shelves.find(s => s.id === rack.shelfId);
+        const storage = state.storageUnits.find(u => u.id === rack.storageId);
+        return lowerIncludes(rack.name, shelf?.name, storage?.name);
+      })
+      .map(rack => ({
+        kind: "rack",
+        rack,
+        shelf: state.shelves.find(s => s.id === rack.shelfId),
+        storage: state.storageUnits.find(u => u.id === rack.storageId)
+      }));
+
+    const drawerMatches: SearchResult[] = state.drawers
+      .filter(drawer => {
+        if (drawer.isArchived) return false;
+        const rack = state.racks.find(r => r.id === drawer.rackId);
+        const shelf = state.shelves.find(s => s.id === drawer.shelfId);
+        const storage = state.storageUnits.find(u => u.id === drawer.storageId);
+        return lowerIncludes(drawer.name, rack?.name, shelf?.name, storage?.name);
+      })
+      .map(drawer => ({
+        kind: "drawer",
+        drawer,
+        rack: state.racks.find(r => r.id === drawer.rackId),
+        shelf: state.shelves.find(s => s.id === drawer.shelfId),
+        storage: state.storageUnits.find(u => u.id === drawer.storageId)
+      }));
+
+    const boxMatches: SearchResult[] = state.boxes
+      .filter(box => {
+        if (box.isArchived) return false;
+        const drawer = box.drawerId ? state.drawers.find(d => d.id === box.drawerId) : undefined;
+        const rack = box.rackId ? state.racks.find(r => r.id === box.rackId) : undefined;
+        const shelf = state.shelves.find(s => s.id === box.shelfId);
+        const storage = state.storageUnits.find(u => u.id === box.storageId);
+        return lowerIncludes(box.name, drawer?.name, rack?.name, shelf?.name, storage?.name);
+      })
+      .map(box => ({
+        kind: "box",
+        box,
+        drawer: box.drawerId ? state.drawers.find(d => d.id === box.drawerId) : undefined,
+        rack: box.rackId ? state.racks.find(r => r.id === box.rackId) : undefined,
+        shelf: state.shelves.find(s => s.id === box.shelfId),
+        storage: state.storageUnits.find(u => u.id === box.storageId)
+      }));
+
+    return [
+      ...sampleMatches,
+      ...storageMatches,
+      ...shelfMatches,
+      ...rackMatches,
+      ...drawerMatches,
+      ...boxMatches
+    ];
+  }, [
+    state.samples,
+    state.storageUnits,
+    state.shelves,
+    state.racks,
+    state.drawers,
+    state.boxes,
+    searchQuery
+  ]);
 
   // Track samples mapped to the currently selected container (Shelf, Rack, Drawer, or Box)
   const currentViewSamples = useMemo(() => {
@@ -632,13 +726,61 @@ export default function App() {
   }, [state.samples, selectedShelfId, selectedRackId, selectedDrawerId, selectedBoxId]);
 
   // Search auto selections
-  const handleSearchResultClick = (sample: Sample) => {
-    setSelectedStorageId(sample.storageId);
-    setSelectedShelfId(sample.shelfId);
-    setSelectedRackId(sample.rackId || "");
-    setSelectedDrawerId(sample.drawerId || "");
-    setSelectedBoxId(sample.boxId);
-    setSelectedSampleId(sample.id);
+  const handleSearchResultClick = (result: SearchResult) => {
+    if (result.kind === "sample") {
+      const sample = result.sample;
+      setSelectedStorageId(sample.storageId);
+      setSelectedShelfId(sample.shelfId);
+      setSelectedRackId(sample.rackId || "");
+      setSelectedDrawerId(sample.drawerId || "");
+      setSelectedBoxId(sample.boxId);
+      setSelectedSampleId(sample.id);
+      return;
+    }
+
+    setSelectedSampleId(null);
+
+    if (result.kind === "storage") {
+      setSelectedStorageId(result.storage.id);
+      setSelectedShelfId("");
+      setSelectedRackId("");
+      setSelectedDrawerId("");
+      setSelectedBoxId(null);
+      return;
+    }
+
+    if (result.kind === "shelf") {
+      setSelectedStorageId(result.shelf.storageId);
+      setSelectedShelfId(result.shelf.id);
+      setSelectedRackId("");
+      setSelectedDrawerId("");
+      setSelectedBoxId(null);
+      return;
+    }
+
+    if (result.kind === "rack") {
+      setSelectedStorageId(result.rack.storageId);
+      setSelectedShelfId(result.rack.shelfId);
+      setSelectedRackId(result.rack.id);
+      setSelectedDrawerId("");
+      setSelectedBoxId(null);
+      return;
+    }
+
+    if (result.kind === "drawer") {
+      setSelectedStorageId(result.drawer.storageId);
+      setSelectedShelfId(result.drawer.shelfId);
+      setSelectedRackId(result.drawer.rackId);
+      setSelectedDrawerId(result.drawer.id);
+      setSelectedBoxId(null);
+      return;
+    }
+
+    setSelectedStorageId(result.box.storageId);
+    setSelectedShelfId(result.box.shelfId);
+    setSelectedRackId(result.box.rackId || "");
+    setSelectedDrawerId(result.box.drawerId || "");
+    setSelectedBoxId(result.box.id);
   };
 
   // Inspect sample
@@ -1311,43 +1453,95 @@ export default function App() {
           </div>
 
           {/* Search suggestions dropdown */}
-          {searchQuery && filteredSamples.length > 0 && (
+          {searchQuery && searchResults.length > 0 && (
             <div className="absolute left-10 right-10 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-64 overflow-y-auto z-20 divide-y divide-slate-100">
               <div className="p-2 bg-slate-50 text-[10px] uppercase font-bold tracking-wider text-slate-400 flex justify-between">
                 <span>Matching Lab Inventory</span>
-                <span>{filteredSamples.length} hits</span>
+                <span>{searchResults.length} hits</span>
               </div>
-              {filteredSamples.slice(0, 10).map(s => {
-                const parentBoxDetail = state.boxes.find(b => b.id === s.boxId);
-                const parentShelfDetail = state.shelves.find(sh => sh.id === s.shelfId);
-                const parentStorageDetail = state.storageUnits.find(u => u.id === s.storageId);
+              {searchResults.slice(0, 10).map((result, idx) => {
+                if (result.kind === "sample") {
+                  const s = result.sample;
+                  const parentBoxDetail = state.boxes.find(b => b.id === s.boxId);
+                  const parentShelfDetail = state.shelves.find(sh => sh.id === s.shelfId);
+                  const parentStorageDetail = state.storageUnits.find(u => u.id === s.storageId);
+                  return (
+                    <button
+                      key={`sample-${s.id}`}
+                      onClick={() => {
+                        handleSearchResultClick(result);
+                        setSearchQuery("");
+                      }}
+                      className="w-full p-3 text-left hover:bg-slate-50 flex justify-between items-center transition-colors text-xs"
+                    >
+                      <div>
+                        <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                          {s.chemicalName}
+                          <span className="px-1.5 py-0.2 bg-emerald-50 text-[10px] rounded text-emerald-700">Sample</span>
+                          {s.itemType && <span className="px-1.5 py-0.2 bg-slate-100 text-[10px] rounded text-slate-500">{s.itemType}</span>}
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                          {s.casNumber && `CAS: ${s.casNumber} • `}Qty: {s.qty} {s.units}
+                        </div>
+                      </div>
+                      <div className="text-right text-[10px] text-indigo-600 font-medium">
+                        {parentStorageDetail?.name} &gt; {parentShelfDetail?.name} {parentBoxDetail ? `&gt; ${parentBoxDetail.name}` : ""}
+                      </div>
+                    </button>
+                  );
+                }
+
+                let title = "";
+                let path = "";
+                let kindLabel = "";
+
+                if (result.kind === "storage") {
+                  title = result.storage.name;
+                  path = result.storage.type;
+                  kindLabel = "Storage";
+                } else if (result.kind === "shelf") {
+                  title = result.shelf.name;
+                  path = `${result.storage?.name || ""}`;
+                  kindLabel = "Shelf";
+                } else if (result.kind === "rack") {
+                  title = result.rack.name;
+                  path = `${result.storage?.name || ""} > ${result.shelf?.name || ""}`;
+                  kindLabel = "Rack";
+                } else if (result.kind === "drawer") {
+                  title = result.drawer.name;
+                  path = `${result.storage?.name || ""} > ${result.shelf?.name || ""} > ${result.rack?.name || ""}`;
+                  kindLabel = "Drawer";
+                } else {
+                  title = result.box.name;
+                  const drawerOrRack = result.drawer?.name || result.rack?.name || "";
+                  path = `${result.storage?.name || ""} > ${result.shelf?.name || ""}${drawerOrRack ? ` > ${drawerOrRack}` : ""}`;
+                  kindLabel = "Box";
+                }
+
                 return (
                   <button
-                    key={s.id}
+                    key={`node-${result.kind}-${idx}`}
                     onClick={() => {
-                      handleSearchResultClick(s);
+                      handleSearchResultClick(result);
                       setSearchQuery("");
                     }}
                     className="w-full p-3 text-left hover:bg-slate-50 flex justify-between items-center transition-colors text-xs"
                   >
                     <div>
                       <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                        {s.chemicalName}
-                        {s.itemType && <span className="px-1.5 py-0.2 bg-slate-100 text-[10px] rounded text-slate-500">{s.itemType}</span>}
+                        {title}
+                        <span className="px-1.5 py-0.2 bg-indigo-50 text-[10px] rounded text-indigo-700">{kindLabel}</span>
                       </div>
-                      <div className="text-[10px] text-slate-400 mt-0.5 font-mono">
-                        {s.casNumber && `CAS: ${s.casNumber} • `}Qty: {s.qty} {s.units}
+                      <div className="text-[10px] text-slate-400 mt-0.5">
+                        {path}
                       </div>
-                    </div>
-                    <div className="text-right text-[10px] text-indigo-600 font-medium">
-                      {parentStorageDetail?.name} &gt; {parentShelfDetail?.name} {parentBoxDetail ? `&gt; ${parentBoxDetail.name}` : ""} {s.row ? `[Row ${s.row}, Col ${s.col}]` : ""}
                     </div>
                   </button>
                 );
               })}
-              {filteredSamples.length > 10 && (
+              {searchResults.length > 10 && (
                 <div className="p-2 text-center text-[10px] text-slate-400 bg-slate-50">
-                  And {filteredSamples.length - 10} other matching samples...
+                  And {searchResults.length - 10} other matching results...
                 </div>
               )}
             </div>
