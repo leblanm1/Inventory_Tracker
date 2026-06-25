@@ -1,0 +1,6 @@
+{
+  "name": "Lab Inventory Tracker",
+  "description": "A real-time, zero-install laboratory storage inventory management system supporting multi-user synchronization, grid visualizers, drag-and-drop, audit logs, and bulk Excel/CSV import/export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
