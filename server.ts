@@ -376,7 +376,30 @@ async function startServer() {
         res.status(400).json({ error: "Invalid inventory state format" });
         return;
       }
+
+      // Preserve audit history even if a client payload is missing/older.
+      const existingState = await loadState();
+
+      const incomingAuditLogs = Array.isArray(newState.auditLogs) ? newState.auditLogs : [];
+      const incomingAuditSnapshots = Array.isArray(newState.auditSnapshots) ? newState.auditSnapshots : [];
+
+      const mergedAuditLogs = [
+        ...incomingAuditLogs,
+        ...existingState.auditLogs.filter(log => !incomingAuditLogs.some(incoming => incoming.id === log.id))
+      ]
+        .sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""))
+        .slice(0, 1000);
+
+      const mergedAuditSnapshots = [
+        ...incomingAuditSnapshots,
+        ...existingState.auditSnapshots.filter(snapshot => !incomingAuditSnapshots.some(incoming => incoming.id === snapshot.id))
+      ]
+        .sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""))
+        .slice(0, 1000);
+
       newState.users = sanitizeUsers(newState.users);
+      newState.auditLogs = mergedAuditLogs;
+      newState.auditSnapshots = mergedAuditSnapshots;
       await saveState(newState);
       res.json({ success: true, message: "Inventory state saved successfully" });
     } catch (err) {
