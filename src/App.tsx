@@ -2001,7 +2001,7 @@ export default function App() {
         <div className="flex items-center gap-4">
           <div className="w-9 h-9 bg-indigo-600 rounded flex items-center justify-center text-white font-extrabold text-lg shadow-sm">L</div>
           <div>
-            <h1 className="text-base font-extrabold tracking-tight text-slate-900">LabSync <span className="text-indigo-600 font-normal">Grid</span></h1>
+            <h1 className="text-base font-extrabold tracking-tight text-slate-900">Sousa Lab Inventory</h1>
             <p className="text-[10px] text-slate-400 font-medium tracking-wide uppercase">Durable Lab Inventory</p>
           </div>
         </div>
