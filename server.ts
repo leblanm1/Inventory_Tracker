@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs/promises";
 import { existsSync } from "fs";
+import net from "node:net";
 import { createServer as createViteServer } from "vite";
 import { InventoryState, StorageUnit, Shelf, Box, Sample, AuditLog, Rack, Drawer } from "./src/types.js";
 
@@ -307,9 +308,52 @@ async function saveState(state: InventoryState): Promise<void> {
   }
 }
 
+function canListenOnPort(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const tester = net.createServer();
+
+    tester.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE" || err.code === "EACCES") {
+        resolve(false);
+        return;
+      }
+      resolve(false);
+    });
+
+    tester.once("listening", () => {
+      tester.close(() => resolve(true));
+    });
+
+    tester.listen(port, "0.0.0.0");
+  });
+}
+
+async function findAvailablePort(startPort: number, maxAttempts = 50): Promise<number> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const candidate = startPort + i;
+    const available = await canListenOnPort(candidate);
+    if (available) return candidate;
+  }
+  throw new Error(`No available port found in range ${startPort}-${startPort + maxAttempts - 1}`);
+}
+
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const portFromEnv = Number(process.env.PORT);
+  const requestedPort = Number.isFinite(portFromEnv) && portFromEnv > 0 ? portFromEnv : 3000;
+  const isDev = process.env.NODE_ENV !== "production";
+  const PORT = isDev ? await findAvailablePort(requestedPort) : requestedPort;
+
+  const hmrPortFromEnv = Number(process.env.HMR_PORT);
+  const requestedHmrPort = Number.isFinite(hmrPortFromEnv) && hmrPortFromEnv > 0 ? hmrPortFromEnv : 24678;
+  const HMR_PORT = isDev ? await findAvailablePort(requestedHmrPort) : requestedHmrPort;
+
+  if (isDev && PORT !== requestedPort) {
+    console.warn(`Port ${requestedPort} is busy, using ${PORT} instead.`);
+  }
+  if (isDev && HMR_PORT !== requestedHmrPort) {
+    console.warn(`HMR port ${requestedHmrPort} is busy, using ${HMR_PORT} instead.`);
+  }
 
   // Middleware
   app.use(express.json({ limit: "50mb" })); // Support large payloads for spreadsheet bulk imports
@@ -381,7 +425,14 @@ async function startServer() {
   // Vite middleware for dev mode
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: {
+          port: HMR_PORT,
+          clientPort: HMR_PORT,
+          host: "0.0.0.0"
+        }
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);

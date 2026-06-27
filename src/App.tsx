@@ -23,13 +23,15 @@ import {
   Archive, 
   Inbox, 
   HelpCircle,
-  FileText
+  FileText,
+  Move
 } from "lucide-react";
 import { StorageUnit, Shelf, Box, Sample, AuditLog, InventoryState, Rack, Drawer } from "./types.js";
 import { convertSamplesToCSV } from "./utils.js";
 import SampleFormModal from "./components/SampleFormModal.jsx";
 import StorageFormModal from "./components/StorageFormModal.jsx";
 import BulkImportPanel from "./components/BulkImportPanel.jsx";
+import BulkMoveModal from "./components/BulkMoveModal.jsx";
 
 const DEFAULT_USERS = [
   "Dr. Aris (Lab Director)",
@@ -37,6 +39,8 @@ const DEFAULT_USERS = [
   "James Miller (Postdoc)",
   "Lab Assistant Bot"
 ];
+
+const CURRENT_USER_STORAGE_KEY = "inventory-current-user";
 
 export default function App() {
   // State from server
@@ -54,7 +58,10 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [currentUser, setCurrentUser] = useState(DEFAULT_USERS[0]);
+  const [currentUser, setCurrentUser] = useState(() => {
+    if (typeof window === "undefined") return DEFAULT_USERS[0];
+    return window.localStorage.getItem(CURRENT_USER_STORAGE_KEY) || DEFAULT_USERS[0];
+  });
 
   // Active navigation/selection paths
   const [selectedStorageId, setSelectedStorageId] = useState<string>("");
@@ -67,6 +74,12 @@ export default function App() {
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
   const [showTrash, setShowTrash] = useState(false);
   const [showBulkImport, setShowBulkImport] = useState(false);
+
+  // Bulk selection/actions
+  const [bulkSelectOpen, setBulkSelectOpen] = useState(false);
+  const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
+  const [bulkItemType, setBulkItemType] = useState<"sample" | "box" | "drawer" | "rack">("sample");
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<string[]>([]);
 
   // Form Modals
   const [sampleModalOpen, setSampleModalOpen] = useState(false);
@@ -282,9 +295,18 @@ export default function App() {
   useEffect(() => {
     if (!state.users.length) return;
     if (!state.users.includes(currentUser)) {
-      setCurrentUser(state.users[0]);
+      const storedUser = typeof window === "undefined"
+        ? ""
+        : window.localStorage.getItem(CURRENT_USER_STORAGE_KEY) || "";
+      setCurrentUser(storedUser && state.users.includes(storedUser) ? storedUser : state.users[0]);
     }
   }, [state.users, currentUser]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && currentUser) {
+      window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, currentUser);
+    }
+  }, [currentUser]);
 
   // Save changes to backend server
   const saveStateToServer = async (updatedState: InventoryState, logAction: string, logDesc: string) => {
@@ -303,6 +325,7 @@ export default function App() {
 
       const finalState = {
         ...updatedState,
+        users: Array.from(new Set([...(updatedState.users || []), currentUser])).filter(Boolean),
         auditLogs: [newLog, ...(updatedState.auditLogs || [])].slice(0, 500) // limit audit log length
       };
 
@@ -989,6 +1012,11 @@ export default function App() {
     const updatedState = { ...state, samples: updatedSamples };
     saveStateToServer(updatedState, logAct, logDesc);
     setSampleModalOpen(false);
+    setSelectedStorageId(savedSample.storageId);
+    setSelectedShelfId(savedSample.shelfId);
+    setSelectedRackId(savedSample.rackId || "");
+    setSelectedDrawerId(savedSample.drawerId || "");
+    setSelectedBoxId(savedSample.boxId || null);
     setSelectedSampleId(savedSample.id);
   };
 
@@ -1085,9 +1113,11 @@ export default function App() {
     let updatedBoxes = [...state.boxes];
     let logAct = "Box Container Created";
     let logDesc = `Created box: ${box.name}`;
+    let finalBox: Box;
 
     if (box.id) {
       updatedBoxes = updatedBoxes.map(b => b.id === box.id ? { ...b, ...box } as Box : b);
+      finalBox = updatedBoxes.find(b => b.id === box.id) as Box;
       logAct = "Box Updated";
       logDesc = `Updated configurations of box "${box.name}"`;
     } else {
@@ -1096,11 +1126,323 @@ export default function App() {
         id: `box-${Date.now()}`
       };
       updatedBoxes.push(newBox);
-      setSelectedBoxId(newBox.id);
+      finalBox = newBox;
     }
 
     saveStateToServer({ ...state, boxes: updatedBoxes }, logAct, logDesc);
+    setSelectedStorageId(finalBox.storageId);
+    setSelectedShelfId(finalBox.shelfId);
+    setSelectedRackId(finalBox.rackId || "");
+    setSelectedDrawerId(finalBox.drawerId || "");
+    setSelectedBoxId(finalBox.id);
     setStorageModalOpen(false);
+  };
+
+  const hasAnyActiveShelf = useMemo(() => {
+    return state.shelves.some(s => !s.isArchived);
+  }, [state.shelves]);
+
+  const handleOpenNewSampleModal = () => {
+    const activeStorages = state.storageUnits.filter(u => !u.isArchived);
+    const activeShelves = state.shelves.filter(s => !s.isArchived);
+    if (!activeStorages.length || !activeShelves.length) {
+      alert("Please create at least one storage unit and shelf before adding samples.");
+      return;
+    }
+
+    const targetStorageId = selectedStorageId || activeStorages[0].id;
+    const shelvesInStorage = activeShelves.filter(s => s.storageId === targetStorageId);
+    const fallbackShelf = shelvesInStorage[0] || activeShelves[0];
+
+    if (!fallbackShelf) {
+      alert("Please create at least one shelf before adding samples.");
+      return;
+    }
+
+    setSelectedStorageId(fallbackShelf.storageId);
+    setSelectedShelfId(selectedShelfId || fallbackShelf.id);
+    setEditingSample(null);
+    setSampleModalOpen(true);
+  };
+
+  const bulkSelectableItems = useMemo(() => {
+    if (bulkItemType === "rack") {
+      return state.racks
+        .filter(r => {
+          if (r.isArchived) return false;
+          if (selectedShelfId) return r.shelfId === selectedShelfId;
+          if (selectedStorageId) return r.storageId === selectedStorageId;
+          return true;
+        })
+        .map(r => ({ id: r.id, label: r.name }));
+    }
+
+    if (bulkItemType === "drawer") {
+      return state.drawers
+        .filter(d => {
+          if (d.isArchived) return false;
+          if (selectedRackId) return d.rackId === selectedRackId;
+          if (selectedShelfId) return d.shelfId === selectedShelfId;
+          if (selectedStorageId) return d.storageId === selectedStorageId;
+          return true;
+        })
+        .map(d => ({ id: d.id, label: d.name }));
+    }
+
+    if (bulkItemType === "box") {
+      return state.boxes
+        .filter(b => {
+          if (b.isArchived) return false;
+          if (selectedDrawerId) return b.drawerId === selectedDrawerId;
+          if (selectedRackId) return b.rackId === selectedRackId;
+          if (selectedShelfId) return b.shelfId === selectedShelfId;
+          if (selectedStorageId) return b.storageId === selectedStorageId;
+          return true;
+        })
+        .map(b => ({ id: b.id, label: b.name }));
+    }
+
+    return state.samples
+      .filter(s => {
+        if (s.isArchived) return false;
+        if (selectedBoxId) return s.boxId === selectedBoxId;
+        if (selectedDrawerId) return s.drawerId === selectedDrawerId;
+        if (selectedRackId) return s.rackId === selectedRackId;
+        if (selectedShelfId) return s.shelfId === selectedShelfId;
+        if (selectedStorageId) return s.storageId === selectedStorageId;
+        return true;
+      })
+      .map(s => ({ id: s.id, label: s.chemicalName }));
+  }, [bulkItemType, state.racks, state.drawers, state.boxes, state.samples, selectedStorageId, selectedShelfId, selectedRackId, selectedDrawerId, selectedBoxId]);
+
+  useEffect(() => {
+    setBulkSelectedIds(prev => prev.filter(id => bulkSelectableItems.some(item => item.id === id)));
+  }, [bulkSelectableItems]);
+
+  const handleConfirmBulkMove = (destination: {
+    storageId: string;
+    shelfId: string;
+    rackId: string | null;
+    drawerId: string | null;
+    boxId: string | null;
+  }) => {
+    if (!bulkSelectedIds.length) return;
+
+    if (bulkItemType === "sample") {
+      const destinationBox = destination.boxId ? state.boxes.find(b => b.id === destination.boxId) : null;
+      const updatedSamples = state.samples.map(s => {
+        if (!bulkSelectedIds.includes(s.id)) return s;
+        return {
+          ...s,
+          storageId: destination.storageId,
+          shelfId: destination.shelfId,
+          rackId: destinationBox?.rackId || destination.rackId,
+          drawerId: destinationBox?.drawerId || destination.drawerId,
+          boxId: destination.boxId,
+          row: null,
+          col: null
+        };
+      });
+      saveStateToServer(
+        { ...state, samples: updatedSamples },
+        "Samples Bulk Relocated",
+        `Moved ${bulkSelectedIds.length} sample(s) via bulk action.`
+      );
+    }
+
+    if (bulkItemType === "box") {
+      const updatedBoxes = state.boxes.map(b => {
+        if (!bulkSelectedIds.includes(b.id)) return b;
+        return {
+          ...b,
+          storageId: destination.storageId,
+          shelfId: destination.shelfId,
+          rackId: destination.rackId,
+          drawerId: destination.drawerId,
+          shelfCol: null
+        };
+      });
+
+      const updatedSamples = state.samples.map(s => {
+        if (!s.boxId || !bulkSelectedIds.includes(s.boxId)) return s;
+        return {
+          ...s,
+          storageId: destination.storageId,
+          shelfId: destination.shelfId,
+          rackId: destination.rackId,
+          drawerId: destination.drawerId
+        };
+      });
+
+      saveStateToServer(
+        { ...state, boxes: updatedBoxes, samples: updatedSamples },
+        "Boxes Bulk Relocated",
+        `Moved ${bulkSelectedIds.length} box(es) via bulk action.`
+      );
+    }
+
+    if (bulkItemType === "drawer") {
+      if (!destination.rackId) {
+        alert("Please select a rack destination for drawers.");
+        return;
+      }
+
+      const targetRack = state.racks.find(r => r.id === destination.rackId);
+      if (!targetRack) return;
+
+      const updatedDrawers = state.drawers.map(d => {
+        if (!bulkSelectedIds.includes(d.id)) return d;
+        return {
+          ...d,
+          rackId: targetRack.id,
+          shelfId: targetRack.shelfId,
+          storageId: targetRack.storageId
+        };
+      });
+
+      const updatedBoxes = state.boxes.map(b => {
+        if (!b.drawerId || !bulkSelectedIds.includes(b.drawerId)) return b;
+        return {
+          ...b,
+          rackId: targetRack.id,
+          shelfId: targetRack.shelfId,
+          storageId: targetRack.storageId
+        };
+      });
+
+      const updatedSamples = state.samples.map(s => {
+        if (!s.drawerId || !bulkSelectedIds.includes(s.drawerId)) return s;
+        return {
+          ...s,
+          rackId: targetRack.id,
+          shelfId: targetRack.shelfId,
+          storageId: targetRack.storageId
+        };
+      });
+
+      saveStateToServer(
+        { ...state, drawers: updatedDrawers, boxes: updatedBoxes, samples: updatedSamples },
+        "Drawers Bulk Relocated",
+        `Moved ${bulkSelectedIds.length} drawer(s) via bulk action.`
+      );
+    }
+
+    if (bulkItemType === "rack") {
+      const updatedRacks = state.racks.map(r => {
+        if (!bulkSelectedIds.includes(r.id)) return r;
+        return {
+          ...r,
+          storageId: destination.storageId,
+          shelfId: destination.shelfId,
+          shelfCol: null
+        };
+      });
+
+      const updatedDrawers = state.drawers.map(d => {
+        if (!bulkSelectedIds.includes(d.rackId)) return d;
+        return {
+          ...d,
+          storageId: destination.storageId,
+          shelfId: destination.shelfId
+        };
+      });
+
+      const updatedBoxes = state.boxes.map(b => {
+        if (!b.rackId || !bulkSelectedIds.includes(b.rackId)) return b;
+        return {
+          ...b,
+          storageId: destination.storageId,
+          shelfId: destination.shelfId
+        };
+      });
+
+      const updatedSamples = state.samples.map(s => {
+        if (!s.rackId || !bulkSelectedIds.includes(s.rackId)) return s;
+        return {
+          ...s,
+          storageId: destination.storageId,
+          shelfId: destination.shelfId
+        };
+      });
+
+      saveStateToServer(
+        { ...state, racks: updatedRacks, drawers: updatedDrawers, boxes: updatedBoxes, samples: updatedSamples },
+        "Racks Bulk Relocated",
+        `Moved ${bulkSelectedIds.length} rack(s) via bulk action.`
+      );
+    }
+
+    setBulkMoveOpen(false);
+    setBulkSelectOpen(false);
+    setBulkSelectedIds([]);
+  };
+
+  const handleBulkArchive = () => {
+    if (!bulkSelectedIds.length) return;
+
+    const proceed = window.confirm(`Archive ${bulkSelectedIds.length} selected ${bulkItemType}(s)? This can be restored from Trash.`);
+    if (!proceed) return;
+
+    if (bulkItemType === "sample") {
+      const updatedSamples = state.samples.map(s =>
+        bulkSelectedIds.includes(s.id) ? { ...s, isArchived: true } : s
+      );
+      saveStateToServer({ ...state, samples: updatedSamples }, "Samples Bulk Archived", `Archived ${bulkSelectedIds.length} sample(s).`);
+    }
+
+    if (bulkItemType === "box") {
+      const updatedBoxes = state.boxes.map(b =>
+        bulkSelectedIds.includes(b.id) ? { ...b, isArchived: true } : b
+      );
+      const updatedSamples = state.samples.map(s =>
+        s.boxId && bulkSelectedIds.includes(s.boxId) ? { ...s, isArchived: true } : s
+      );
+      saveStateToServer(
+        { ...state, boxes: updatedBoxes, samples: updatedSamples },
+        "Boxes Bulk Archived",
+        `Archived ${bulkSelectedIds.length} box(es) and contained samples.`
+      );
+    }
+
+    if (bulkItemType === "drawer") {
+      const updatedDrawers = state.drawers.map(d =>
+        bulkSelectedIds.includes(d.id) ? { ...d, isArchived: true } : d
+      );
+      const updatedBoxes = state.boxes.map(b =>
+        b.drawerId && bulkSelectedIds.includes(b.drawerId) ? { ...b, isArchived: true } : b
+      );
+      const updatedSamples = state.samples.map(s =>
+        s.drawerId && bulkSelectedIds.includes(s.drawerId) ? { ...s, isArchived: true } : s
+      );
+      saveStateToServer(
+        { ...state, drawers: updatedDrawers, boxes: updatedBoxes, samples: updatedSamples },
+        "Drawers Bulk Archived",
+        `Archived ${bulkSelectedIds.length} drawer(s) and nested contents.`
+      );
+    }
+
+    if (bulkItemType === "rack") {
+      const updatedRacks = state.racks.map(r =>
+        bulkSelectedIds.includes(r.id) ? { ...r, isArchived: true } : r
+      );
+      const updatedDrawers = state.drawers.map(d =>
+        bulkSelectedIds.includes(d.rackId) ? { ...d, isArchived: true } : d
+      );
+      const updatedBoxes = state.boxes.map(b =>
+        b.rackId && bulkSelectedIds.includes(b.rackId) ? { ...b, isArchived: true } : b
+      );
+      const updatedSamples = state.samples.map(s =>
+        s.rackId && bulkSelectedIds.includes(s.rackId) ? { ...s, isArchived: true } : s
+      );
+      saveStateToServer(
+        { ...state, racks: updatedRacks, drawers: updatedDrawers, boxes: updatedBoxes, samples: updatedSamples },
+        "Racks Bulk Archived",
+        `Archived ${bulkSelectedIds.length} rack(s) and nested contents.`
+      );
+    }
+
+    setBulkSelectedIds([]);
+    setBulkSelectOpen(false);
   };
 
   // Bulk Import Panel Completion handler
@@ -2257,10 +2599,17 @@ export default function App() {
                 <div className="flex gap-2">
                   <button
                     onClick={() => {
-                      setEditingSample(null);
-                      setSampleModalOpen(true);
+                      setBulkSelectedIds([]);
+                      setBulkItemType("sample");
+                      setBulkSelectOpen(true);
                     }}
-                    disabled={!selectedStorageId || !selectedShelfId}
+                    className="px-3 py-2 text-xs font-bold bg-white border border-slate-200 hover:border-indigo-200 hover:bg-slate-50 text-slate-700 rounded-lg shadow-sm transition-all flex items-center gap-1 cursor-pointer"
+                  >
+                    <Move className="h-3.5 w-3.5" /> Bulk Actions
+                  </button>
+                  <button
+                    onClick={handleOpenNewSampleModal}
+                    disabled={!hasAnyActiveShelf}
                     className="px-4 py-2 text-xs font-bold bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-lg shadow-sm transition-all flex items-center gap-1 cursor-pointer"
                   >
                     <Plus className="h-3.5 w-3.5" /> New Sample
@@ -2444,10 +2793,7 @@ export default function App() {
                             <Inbox className="h-8 w-8 text-slate-300 mx-auto mb-2" />
                             <p className="text-xs text-slate-500">No samples placed directly in this container.</p>
                             <button
-                              onClick={() => {
-                                setEditingSample(null);
-                                setSampleModalOpen(true);
-                              }}
+                              onClick={handleOpenNewSampleModal}
                               className="mt-2 text-xs font-bold text-indigo-600 hover:underline cursor-pointer"
                             >
                               + Add Sample Now
@@ -4272,6 +4618,116 @@ export default function App() {
           <span>Storage Capacity Used: {totalCapacityUsed}%</span>
         </div>
       </footer>
+
+      {bulkSelectOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+          <div className="w-full max-w-xl bg-white rounded-xl border border-slate-200 shadow-2xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900">Bulk Select & Actions</h3>
+              <button
+                onClick={() => setBulkSelectOpen(false)}
+                className="p-1 rounded hover:bg-slate-100 text-slate-500"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-slate-400 font-bold mb-1">Item Type</label>
+                  <select
+                    value={bulkItemType}
+                    onChange={(e) => {
+                      setBulkItemType(e.target.value as "sample" | "box" | "drawer" | "rack");
+                      setBulkSelectedIds([]);
+                    }}
+                    className="w-full px-3 py-2 text-xs font-semibold border border-slate-200 rounded-lg outline-hidden"
+                  >
+                    <option value="sample">Samples</option>
+                    <option value="box">Boxes</option>
+                    <option value="drawer">Drawers</option>
+                    <option value="rack">Racks</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-slate-400 font-bold mb-1">Selected</label>
+                  <div className="h-[34px] px-3 flex items-center text-xs font-semibold rounded-lg border border-slate-200 bg-slate-50 text-slate-700">
+                    {bulkSelectedIds.length} item(s)
+                  </div>
+                </div>
+              </div>
+
+              <div className="border border-slate-200 rounded-lg max-h-64 overflow-y-auto divide-y divide-slate-100">
+                {bulkSelectableItems.length === 0 ? (
+                  <p className="text-xs text-slate-500 p-4">No matching items in the current scope.</p>
+                ) : (
+                  bulkSelectableItems.map(item => {
+                    const checked = bulkSelectedIds.includes(item.id);
+                    return (
+                      <label key={item.id} className="flex items-center gap-2.5 px-3 py-2 text-xs hover:bg-slate-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setBulkSelectedIds(prev => [...prev, item.id]);
+                            } else {
+                              setBulkSelectedIds(prev => prev.filter(id => id !== item.id));
+                            }
+                          }}
+                          className="h-3.5 w-3.5"
+                        />
+                        <span className="text-slate-800 font-medium truncate">{item.label}</span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            <div className="px-5 py-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
+              <button
+                onClick={() => setBulkSelectOpen(false)}
+                className="px-3 py-2 text-xs font-bold border border-slate-200 rounded-lg hover:bg-slate-100 text-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!bulkSelectedIds.length) return;
+                  setBulkMoveOpen(true);
+                }}
+                disabled={!bulkSelectedIds.length}
+                className="px-3 py-2 text-xs font-bold border border-indigo-200 text-indigo-700 rounded-lg hover:bg-indigo-50 disabled:opacity-50"
+              >
+                Move Selected
+              </button>
+              <button
+                onClick={handleBulkArchive}
+                disabled={!bulkSelectedIds.length}
+                className="px-3 py-2 text-xs font-bold bg-red-600 hover:bg-red-700 text-white rounded-lg disabled:opacity-50"
+              >
+                Archive Selected
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <BulkMoveModal
+        isOpen={bulkMoveOpen}
+        onClose={() => setBulkMoveOpen(false)}
+        itemType={bulkItemType}
+        selectedCount={bulkSelectedIds.length}
+        storageUnits={state.storageUnits}
+        shelves={state.shelves}
+        racks={state.racks}
+        drawers={state.drawers}
+        boxes={state.boxes}
+        onConfirmMove={handleConfirmBulkMove}
+      />
 
       {/* Form Modals */}
       <SampleFormModal
