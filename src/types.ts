@@ -137,6 +137,22 @@ export interface AuditLog {
   description: string;
 }
 
+export interface AuditSnapshot {
+  id: string;
+  logId: string;
+  timestamp: string;
+  user: string;
+  action: string;
+  description: string;
+  users: string[];
+  storageUnits: StorageUnit[];
+  shelves: Shelf[];
+  racks: Rack[];
+  drawers: Drawer[];
+  boxes: Box[];
+  samples: Sample[];
+}
+
 export interface InventoryState {
   users: string[];
   storageUnits: StorageUnit[];
@@ -146,4 +162,5 @@ export interface InventoryState {
   boxes: Box[];
   samples: Sample[];
   auditLogs: AuditLog[];
+  auditSnapshots: AuditSnapshot[];
 }

@@ -26,7 +26,7 @@ import {
   FileText,
   Move
 } from "lucide-react";
-import { StorageUnit, Shelf, Box, Sample, AuditLog, InventoryState, Rack, Drawer } from "./types.js";
+import { StorageUnit, Shelf, Box, Sample, AuditLog, InventoryState, Rack, Drawer, AuditSnapshot } from "./types.js";
 import { convertSamplesToCSV } from "./utils.js";
 import SampleFormModal from "./components/SampleFormModal.jsx";
 import StorageFormModal from "./components/StorageFormModal.jsx";
@@ -52,7 +52,8 @@ export default function App() {
     drawers: [],
     boxes: [],
     samples: [],
-    auditLogs: []
+    auditLogs: [],
+    auditSnapshots: []
   });
 
   const [loading, setLoading] = useState(true);
@@ -75,6 +76,8 @@ export default function App() {
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
   const [showTrash, setShowTrash] = useState(false);
   const [showBulkImport, setShowBulkImport] = useState(false);
+  const [showAuditTrailModal, setShowAuditTrailModal] = useState(false);
+  const [auditSearch, setAuditSearch] = useState("");
 
   // Bulk selection/actions
   const [bulkSelectOpen, setBulkSelectOpen] = useState(false);
@@ -273,7 +276,8 @@ export default function App() {
           drawers: data.drawers || [],
           boxes: data.boxes || [],
           samples: data.samples || [],
-          auditLogs: data.auditLogs || []
+          auditLogs: data.auditLogs || [],
+          auditSnapshots: data.auditSnapshots || []
         };
         setState(normalized);
 
@@ -332,10 +336,27 @@ export default function App() {
         description: logDesc
       };
 
+      const newSnapshot: AuditSnapshot = {
+        id: `snap-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        logId: newLog.id,
+        timestamp: now,
+        user: currentUser,
+        action: logAction,
+        description: logDesc,
+        users: Array.from(new Set([...(updatedState.users || []), currentUser])).filter(Boolean),
+        storageUnits: updatedState.storageUnits || [],
+        shelves: updatedState.shelves || [],
+        racks: updatedState.racks || [],
+        drawers: updatedState.drawers || [],
+        boxes: updatedState.boxes || [],
+        samples: updatedState.samples || []
+      };
+
       const finalState = {
         ...updatedState,
         users: Array.from(new Set([...(updatedState.users || []), currentUser])).filter(Boolean),
-        auditLogs: [newLog, ...(updatedState.auditLogs || [])].slice(0, 500) // limit audit log length
+        auditLogs: [newLog, ...(updatedState.auditLogs || [])].slice(0, 1000),
+        auditSnapshots: [newSnapshot, ...(updatedState.auditSnapshots || [])].slice(0, 1000)
       };
 
       const res = await fetch("/api/inventory", {
@@ -391,6 +412,91 @@ export default function App() {
   const handleBackupExport = () => {
     window.open("/api/export", "_blank");
   };
+
+  const handleExportAuditTrailJSON = () => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      totalLogs: state.auditLogs.length,
+      auditLogs: state.auditLogs
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `lab_inventory_audit_trail_${new Date().toISOString().split("T")[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleExportAuditTrailCSV = () => {
+    const esc = (val: string) => `"${(val || "").replace(/"/g, '""')}"`;
+    const rows = state.auditLogs.map(log => [
+      esc(log.timestamp),
+      esc(log.user),
+      esc(log.action),
+      esc(log.description)
+    ].join(","));
+
+    const csv = ["timestamp,user,action,description", ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `lab_inventory_audit_trail_${new Date().toISOString().split("T")[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleRestoreFromSnapshot = (snapshotId: string) => {
+    const snapshot = state.auditSnapshots.find(s => s.id === snapshotId);
+    if (!snapshot) {
+      alert("Snapshot not found for this audit entry.");
+      return;
+    }
+
+    const confirmed = window.confirm(`Restore inventory to this point in time?\n${snapshot.action} (${new Date(snapshot.timestamp).toLocaleString()})`);
+    if (!confirmed) return;
+
+    const restoredState: InventoryState = {
+      ...state,
+      users: snapshot.users,
+      storageUnits: snapshot.storageUnits,
+      shelves: snapshot.shelves,
+      racks: snapshot.racks,
+      drawers: snapshot.drawers,
+      boxes: snapshot.boxes,
+      samples: snapshot.samples
+    };
+
+    saveStateToServer(
+      restoredState,
+      "State Restored",
+      `Restored inventory to audit point: ${snapshot.action} (${new Date(snapshot.timestamp).toLocaleString()}).`
+    );
+  };
+
+  const handleUndoLastChange = () => {
+    if (!state.auditSnapshots || state.auditSnapshots.length < 2) {
+      alert("No earlier snapshot available to undo to.");
+      return;
+    }
+
+    const previousSnapshot = state.auditSnapshots[1];
+    handleRestoreFromSnapshot(previousSnapshot.id);
+  };
+
+  const filteredAuditLogs = useMemo(() => {
+    const query = auditSearch.trim().toLowerCase();
+    if (!query) return state.auditLogs;
+    return state.auditLogs.filter(log =>
+      log.action.toLowerCase().includes(query) ||
+      log.description.toLowerCase().includes(query) ||
+      log.user.toLowerCase().includes(query)
+    );
+  }, [state.auditLogs, auditSearch]);
 
   // Helper to trigger full CSV backup download
   const handleCSVExport = () => {
@@ -4643,12 +4749,26 @@ export default function App() {
               <h3 className="text-[10px] uppercase font-bold text-slate-400 tracking-widest flex items-center gap-1">
                 <History className="h-3.5 w-3.5 text-slate-400" /> Recent Audit Trail
               </h3>
-              <span className="text-[9px] bg-slate-200 text-slate-600 font-bold px-1.5 py-0.5 rounded-full">Real-time</span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={handleUndoLastChange}
+                  className="text-[9px] bg-orange-100 hover:bg-orange-200 text-orange-700 font-bold px-1.5 py-0.5 rounded-full cursor-pointer"
+                  title="Undo last change"
+                >
+                  Undo Last
+                </button>
+                <button
+                  onClick={() => setShowAuditTrailModal(true)}
+                  className="text-[9px] bg-slate-200 hover:bg-slate-300 text-slate-600 font-bold px-1.5 py-0.5 rounded-full cursor-pointer"
+                >
+                  Full Trail
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
               {state.auditLogs && state.auditLogs.length > 0 ? (
-                state.auditLogs.map((log) => (
+                state.auditLogs.slice(0, 50).map((log) => (
                   <div key={log.id} className="relative pl-4 border-l-2 border-slate-200/80">
                     <div className="absolute -left-[5px] top-0.5 w-2.5 h-2.5 rounded-full bg-indigo-500 border border-white"></div>
                     <p className="text-[11px] font-bold text-slate-800">{log.action}</p>
@@ -4667,6 +4787,86 @@ export default function App() {
           </div>
         </aside>
       </main>
+
+      {showAuditTrailModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-5xl max-h-[90vh] bg-white rounded-xl border border-slate-200 shadow-2xl overflow-hidden flex flex-col">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Full Audit Trail</h3>
+                <p className="text-xs text-slate-500">Review, restore, and export complete change history.</p>
+              </div>
+              <button
+                onClick={() => setShowAuditTrailModal(false)}
+                className="p-1 rounded hover:bg-slate-200 text-slate-500"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="px-5 py-3 border-b border-slate-100 bg-white flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={auditSearch}
+                onChange={(e) => setAuditSearch(e.target.value)}
+                placeholder="Filter by action, description, or user..."
+                className="flex-1 min-w-[220px] px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 outline-hidden"
+              />
+              <button
+                onClick={handleUndoLastChange}
+                className="px-3 py-2 text-xs font-bold bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-lg"
+              >
+                Undo Last Change
+              </button>
+              <button
+                onClick={handleExportAuditTrailCSV}
+                className="px-3 py-2 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg flex items-center gap-1"
+              >
+                <Download className="h-3.5 w-3.5" /> Export CSV
+              </button>
+              <button
+                onClick={handleExportAuditTrailJSON}
+                className="px-3 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center gap-1"
+              >
+                <Download className="h-3.5 w-3.5" /> Export JSON
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-3 bg-slate-50/30">
+              {filteredAuditLogs.length === 0 ? (
+                <p className="text-xs text-slate-500 italic text-center py-8">No audit records match your filter.</p>
+              ) : (
+                filteredAuditLogs.map(log => {
+                  const relatedSnapshot = state.auditSnapshots.find(s => s.logId === log.id);
+                  return (
+                    <div key={log.id} className="bg-white border border-slate-200 rounded-lg p-3.5">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-bold text-slate-900">{log.action}</p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            {new Date(log.timestamp).toLocaleString()} • {log.user}
+                          </p>
+                        </div>
+                        {relatedSnapshot ? (
+                          <button
+                            onClick={() => handleRestoreFromSnapshot(relatedSnapshot.id)}
+                            className="px-2.5 py-1.5 text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-md"
+                          >
+                            Restore This Point
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-slate-400">No snapshot</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-600 mt-2 leading-relaxed">{log.description}</p>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Footer Status */}
       <footer className="h-8 bg-slate-900 text-white flex items-center px-4 text-[10px] uppercase tracking-wider shrink-0 justify-between">

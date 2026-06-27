@@ -263,7 +263,7 @@ function getDemoState(): InventoryState {
   const racks: Rack[] = [];
   const drawers: Drawer[] = [];
 
-  return { users: DEFAULT_USERS, storageUnits, shelves, racks, drawers, boxes, samples, auditLogs };
+  return { users: DEFAULT_USERS, storageUnits, shelves, racks, drawers, boxes, samples, auditLogs, auditSnapshots: [] };
 }
 
 // Function to load inventory state
@@ -287,7 +287,8 @@ async function loadState(): Promise<InventoryState> {
       drawers: parsed.drawers || [],
       boxes: parsed.boxes || [],
       samples: parsed.samples || [],
-      auditLogs: parsed.auditLogs || []
+      auditLogs: parsed.auditLogs || [],
+      auditSnapshots: parsed.auditSnapshots || []
     };
   } catch (err) {
     console.error("Error loading inventory state:", err);
@@ -403,6 +404,14 @@ async function startServer() {
         res.status(400).json({ error: "Invalid backup JSON file content" });
         return;
       }
+      importedState.storageUnits = importedState.storageUnits || [];
+      importedState.shelves = importedState.shelves || [];
+      importedState.racks = importedState.racks || [];
+      importedState.drawers = importedState.drawers || [];
+      importedState.boxes = importedState.boxes || [];
+      importedState.samples = importedState.samples || [];
+      importedState.auditLogs = importedState.auditLogs || [];
+      importedState.auditSnapshots = importedState.auditSnapshots || [];
       importedState.users = sanitizeUsers(importedState.users);
       // Add audit log for restore
       const now = new Date().toISOString();
