@@ -3289,7 +3289,7 @@ export default function App() {
                       : currentShelf 
                       ? `${currentShelf.name} Shelf View` 
                       : currentStorage
-                      ? `${currentStorage.name} Freezer/Refrigerator View`
+                      ? currentStorage.name
                       : "Laboratory Storage Dashboard"}
                     {currentBox && currentBox.rows && (
                       <span className="text-xs font-normal text-slate-400">
