@@ -2920,7 +2920,9 @@ export default function App() {
 
                         {unitShelves.map(shelf => {
                           const isShelfActive = selectedShelfId === shelf.id;
-                          const shelfRacks = state.racks.filter(r => r.shelfId === shelf.id && !r.isArchived);
+                          const shelfRacks = state.racks
+                            .filter(r => r.shelfId === shelf.id && !r.isArchived)
+                            .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
                           const shelfDirectBoxes = state.boxes.filter(b => b.shelfId === shelf.id && !b.rackId && !b.isArchived);
                           return (
                             <div key={shelf.id} className="space-y-0.5">
@@ -2991,7 +2993,9 @@ export default function App() {
 
                                     {shelfRacks.map(rack => {
                                       const isRackActive = selectedRackId === rack.id;
-                                      const rackDrawers = state.drawers.filter(d => d.rackId === rack.id && !d.isArchived);
+                                      const rackDrawers = state.drawers
+                                        .filter(d => d.rackId === rack.id && !d.isArchived)
+                                        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
                                       const rackBoxes = state.boxes.filter(b => b.rackId === rack.id && !b.drawerId && !b.isArchived);
                                       return (
                                         <div key={rack.id} className="space-y-0.5">

@@ -99,8 +99,12 @@ export default function BulkMoveModal({
 
   // Filter lists based on hierarchy selection
   const currentShelves = shelves.filter(s => s.storageId === selectedStorage && !s.isArchived);
-  const currentRacks = racks.filter(r => r.shelfId === selectedShelf && !r.isArchived);
-  const currentDrawers = drawers.filter(d => d.rackId === selectedRack && !d.isArchived);
+  const currentRacks = racks
+    .filter(r => r.shelfId === selectedShelf && !r.isArchived)
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+  const currentDrawers = drawers
+    .filter(d => d.rackId === selectedRack && !d.isArchived)
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
   
   // Boxes can be direct on shelf, inside a rack, or inside a drawer
   const currentBoxes = boxes.filter(b => {
