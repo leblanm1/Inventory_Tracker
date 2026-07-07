@@ -1585,7 +1585,6 @@ export default function App() {
         logDesc = `Created new rack: ${rackData.name} with ${drawerCount} auto-generated drawers (${autoDrawers.map(d => d.name).join(", ")}).`;
       }
 
-      setSelectedRackId(newRack.id);
     }
 
     saveStateToServer({ ...state, racks: updatedRacks, drawers: updatedDrawers }, logAct, logDesc);
@@ -1621,7 +1620,6 @@ export default function App() {
         id: `drawer-${Date.now()}`
       };
       updatedDrawers.push(newDrawer);
-      setSelectedDrawerId(newDrawer.id);
     }
 
     saveStateToServer({ ...state, drawers: updatedDrawers }, logAct, logDesc);
@@ -1703,11 +1701,6 @@ export default function App() {
     }
 
     saveStateToServer({ ...state, boxes: updatedBoxes }, logAct, logDesc);
-    setSelectedStorageId(finalBox.storageId);
-    setSelectedShelfId(finalBox.shelfId);
-    setSelectedRackId(finalBox.rackId || "");
-    setSelectedDrawerId(finalBox.drawerId || "");
-    setSelectedBoxId(finalBox.id);
     setBoxDefaultDrawerSlot(null);
     setStorageModalOpen(false);
   };
