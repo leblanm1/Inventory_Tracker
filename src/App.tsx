@@ -82,6 +82,8 @@ export default function App() {
 
   // Inspector and modal triggers
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
+  const [selectedGridSampleIds, setSelectedGridSampleIds] = useState<string[]>([]);
+  const [gridSelectionAnchorId, setGridSelectionAnchorId] = useState<string | null>(null);
   const [showTrash, setShowTrash] = useState(false);
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [showAuditTrailModal, setShowAuditTrailModal] = useState(false);
@@ -971,6 +973,21 @@ export default function App() {
     return [];
   }, [state.samples, selectedShelfId, selectedRackId, selectedDrawerId, selectedBoxId]);
 
+  const currentGridSamples = useMemo(() => {
+    return [...currentViewSamples]
+      .filter(sample => typeof sample.row === "number" && typeof sample.col === "number")
+      .sort((a, b) => {
+        const rowDiff = (a.row || 0) - (b.row || 0);
+        if (rowDiff !== 0) return rowDiff;
+        return (a.col || 0) - (b.col || 0);
+      });
+  }, [currentViewSamples]);
+
+  useEffect(() => {
+    setSelectedGridSampleIds([]);
+    setGridSelectionAnchorId(null);
+  }, [selectedBoxId, selectedDrawerId, selectedRackId, selectedShelfId]);
+
   // Search auto selections
   const handleSearchResultClick = (result: SearchResult) => {
     if (result.kind === "sample") {
@@ -1076,7 +1093,42 @@ export default function App() {
         `Archived/deleted sample "${name}" from its location.`
       );
       if (selectedSampleId === id) setSelectedSampleId(null);
+      setSelectedGridSampleIds(prev => prev.filter(sampleId => sampleId !== id));
+      if (gridSelectionAnchorId === id) setGridSelectionAnchorId(null);
     }
+  };
+
+  const handleArchiveSelectedGridSamples = () => {
+    if (!selectedGridSampleIds.length) return;
+
+    const selectedCount = selectedGridSampleIds.length;
+    const confirmed = window.confirm(`Archive ${selectedCount} selected sample(s) from this box? This action is non-destructive and can be undone.`);
+    if (!confirmed) return;
+
+    const updatedSamples = state.samples.map(sample =>
+      selectedGridSampleIds.includes(sample.id) ? { ...sample, isArchived: true } : sample
+    );
+
+    saveStateToServer(
+      { ...state, samples: updatedSamples },
+      "Samples Bulk Archived",
+      `Archived ${selectedCount} selected sample(s) from the current box.`
+    );
+
+    if (selectedSampleId && selectedGridSampleIds.includes(selectedSampleId)) {
+      setSelectedSampleId(null);
+    }
+    setSelectedGridSampleIds([]);
+    setGridSelectionAnchorId(null);
+  };
+
+  const handleMoveSelectedGridSamples = () => {
+    if (!selectedGridSampleIds.length) return;
+
+    setBulkItemType("sample");
+    setBulkSelectedIds([...selectedGridSampleIds]);
+    setBulkSelectOpen(false);
+    setBulkMoveOpen(true);
   };
 
   const handleDepleteSample = (id: string, name: string) => {
@@ -2041,6 +2093,8 @@ export default function App() {
     setBulkMoveOpen(false);
     setBulkSelectOpen(false);
     setBulkSelectedIds([]);
+    setSelectedGridSampleIds([]);
+    setGridSelectionAnchorId(null);
   };
 
   const handleBulkArchive = () => {
@@ -3301,6 +3355,25 @@ export default function App() {
                 </div>
 
                 <div className="flex gap-2">
+                  {selectedGridSampleIds.length > 0 && currentBox && currentBox.rows && currentBox.cols && (
+                    <>
+                      <div className="px-2.5 py-2 text-xs font-bold rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700">
+                        {selectedGridSampleIds.length} selected
+                      </div>
+                      <button
+                        onClick={handleMoveSelectedGridSamples}
+                        className="px-3 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-sm transition-all flex items-center gap-1 cursor-pointer"
+                      >
+                        <Move className="h-3.5 w-3.5" /> Move Selected
+                      </button>
+                      <button
+                        onClick={handleArchiveSelectedGridSamples}
+                        className="px-3 py-2 text-xs font-bold bg-red-600 hover:bg-red-700 text-white rounded-lg shadow-sm transition-all flex items-center gap-1 cursor-pointer"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" /> Archive Selected
+                      </button>
+                    </>
+                  )}
                   <button
                     onClick={() => {
                       setBulkSelectedIds([]);
@@ -3499,7 +3572,8 @@ export default function App() {
                               
                               // Find sample inside this slot
                               const slotSample = currentViewSamples.find(s => s.row === rowNum && s.col === colNum);
-                              const isSelected = selectedSampleId === slotSample?.id;
+                              const isSelected = Boolean(slotSample && (selectedGridSampleIds.includes(slotSample.id) || selectedSampleId === slotSample.id));
+                              const selectionIndex = slotSample ? selectedGridSampleIds.indexOf(slotSample.id) : -1;
                               const isDragOver = dragOverCell?.row === rowNum && dragOverCell?.col === colNum;
                               
                               // Determine fill colors based on quantity or presence
@@ -3528,16 +3602,62 @@ export default function App() {
                                   onDragOver={(e) => handleDragOver(e, rowNum, colNum)}
                                   onDragLeave={handleDragLeave}
                                   onDrop={(e) => handleDropOnGrid(e, rowNum, colNum)}
-                                  onClick={() => {
+                                  onClick={(e) => {
                                     if (slotSample) {
-                                      setSelectedSampleId(slotSample.id);
+                                      const clickedSampleId = slotSample.id;
+                                      if (e.shiftKey && currentGridSamples.length > 0) {
+                                        const anchorId = gridSelectionAnchorId || selectedSampleId;
+                                        const anchorIndex = anchorId ? currentGridSamples.findIndex(sample => sample.id === anchorId) : -1;
+                                        const clickedIndex = currentGridSamples.findIndex(sample => sample.id === clickedSampleId);
+
+                                        if (anchorIndex >= 0 && clickedIndex >= 0) {
+                                          const startIndex = Math.min(anchorIndex, clickedIndex);
+                                          const endIndex = Math.max(anchorIndex, clickedIndex);
+                                          const rangeSelection = currentGridSamples.slice(startIndex, endIndex + 1).map(sample => sample.id);
+                                          setSelectedGridSampleIds(rangeSelection);
+                                          setGridSelectionAnchorId(anchorId || clickedSampleId);
+                                          setSelectedSampleId(clickedSampleId);
+                                          return;
+                                        }
+                                      }
+
+                                      if (e.ctrlKey || e.metaKey) {
+                                        setSelectedGridSampleIds(prev => {
+                                          const alreadySelected = prev.includes(clickedSampleId);
+                                          const next = alreadySelected
+                                            ? prev.filter(sampleId => sampleId !== clickedSampleId)
+                                            : [...prev, clickedSampleId];
+
+                                          if (alreadySelected) {
+                                            setSelectedSampleId(next[0] || null);
+                                            if (gridSelectionAnchorId === clickedSampleId) {
+                                              setGridSelectionAnchorId(next[0] || null);
+                                            }
+                                          } else {
+                                            setSelectedSampleId(clickedSampleId);
+                                            setGridSelectionAnchorId(clickedSampleId);
+                                          }
+
+                                          return next;
+                                        });
+                                        return;
+                                      }
+
+                                      setSelectedSampleId(clickedSampleId);
+                                      setSelectedGridSampleIds([clickedSampleId]);
+                                      setGridSelectionAnchorId(clickedSampleId);
                                       return;
                                     }
                                     handleOpenNewSampleAtGridCell(rowNum, colNum);
                                   }}
-                                  className={`w-11 h-11 border rounded flex flex-col items-center justify-center cursor-pointer transition-all ${bgClass}`}
+                                  className={`relative w-11 h-11 border rounded flex flex-col items-center justify-center cursor-pointer transition-all ${bgClass}`}
                                   title={slotSample ? `${slotSample.chemicalName} (Qty: ${slotSample.qty} ${slotSample.units})` : `Empty slot Row ${rowNum}, Col ${colNum}`}
                                 >
+                                  {isSelected && (
+                                    <span className="absolute top-0.5 right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-white/95 px-1 text-[8px] font-extrabold text-indigo-700 shadow-sm border border-indigo-200">
+                                      {selectedGridSampleIds.length > 1 && selectionIndex >= 0 ? selectionIndex + 1 : <Check className="h-2.5 w-2.5" />}
+                                    </span>
+                                  )}
                                   <span className="text-[9px] block opacity-60">
                                     {String.fromCharCode(64 + rowNum)}{colNum}
                                   </span>
