@@ -1328,31 +1328,39 @@ export default function App() {
   };
 
   // Save manual sample additions / edits
-  const handleSaveSample = (savedSample: Sample) => {
+  const handleSaveSample = (savedSample: Sample | Sample[]) => {
+    const savedSamples = Array.isArray(savedSample) ? savedSample : [savedSample];
     let updatedSamples = [...state.samples];
-    const index = updatedSamples.findIndex(s => s.id === savedSample.id);
-    let logAct = "Sample Added";
-    let logDesc = `Added new sample "${savedSample.chemicalName}" to storage location.`;
+    let logAct = savedSamples.length > 1 ? "Samples Added" : "Sample Added";
+    let logDesc = savedSamples.length > 1
+      ? `Added ${savedSamples.length} sample(s) to storage location.`
+      : `Added new sample "${savedSamples[0].chemicalName}" to storage location.`;
 
-    if (index >= 0) {
-      updatedSamples[index] = savedSample;
-      logAct = "Sample Updated";
-      logDesc = `Updated chemical data & coordinates for sample "${savedSample.chemicalName}".`;
-    } else {
-      updatedSamples.push(savedSample);
-    }
+    savedSamples.forEach(sampleItem => {
+      const index = updatedSamples.findIndex(s => s.id === sampleItem.id);
+      if (index >= 0) {
+        updatedSamples[index] = sampleItem;
+        logAct = savedSamples.length > 1 ? "Samples Updated" : "Sample Updated";
+        logDesc = savedSamples.length > 1
+          ? `Updated ${savedSamples.length} sample(s) in storage location.`
+          : `Updated chemical data & coordinates for sample "${sampleItem.chemicalName}".`;
+      } else {
+        updatedSamples.push(sampleItem);
+      }
+    });
 
     const updatedState = { ...state, samples: updatedSamples };
     saveStateToServer(updatedState, logAct, logDesc);
     setSampleModalOpen(false);
     setSampleDefaultRow(null);
     setSampleDefaultCol(null);
-    setSelectedStorageId(savedSample.storageId);
-    setSelectedShelfId(savedSample.shelfId);
-    setSelectedRackId(savedSample.rackId || "");
-    setSelectedDrawerId(savedSample.drawerId || "");
-    setSelectedBoxId(savedSample.boxId || null);
-    setSelectedSampleId(savedSample.id);
+    const focusSample = savedSamples[0];
+    setSelectedStorageId(focusSample.storageId);
+    setSelectedShelfId(focusSample.shelfId);
+    setSelectedRackId(focusSample.rackId || "");
+    setSelectedDrawerId(focusSample.drawerId || "");
+    setSelectedBoxId(focusSample.boxId || null);
+    setSelectedSampleId(focusSample.id);
   };
 
   // Save manual storage units / shelves / boxes

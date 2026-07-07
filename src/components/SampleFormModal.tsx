@@ -6,7 +6,7 @@ import { X, Save, Layers } from "lucide-react";
 interface SampleFormModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (sample: Sample) => void;
+  onSave: (sample: Sample | Sample[]) => void;
   sample: Sample | null; // Null means create new
   storageUnits: StorageUnit[];
   shelves: Shelf[];
@@ -292,61 +292,116 @@ export default function SampleFormModal({
 
     const finalBoxId = selectedBox === "direct" ? null : selectedBox;
     const finalBox = boxes.find(b => b.id === finalBoxId);
-    
-    let rowVal: number | null = null;
-    let colVal: number | null = null;
+    const requestedQty = Math.max(1, Math.floor(Number(formData.qty) || 1));
+    const isGridBox = Boolean(finalBox && finalBox.rows && finalBox.cols);
 
-    if (finalBox && finalBox.rows && finalBox.cols) {
-      rowVal = Number(formData.row);
-      colVal = Number(formData.col);
-
-      if (isNaN(rowVal) || rowVal < 1 || rowVal > finalBox.rows) {
-        setValidationError(`Row must be a number between 1 and ${finalBox.rows} for grid container.`);
-        return;
-      }
-      if (isNaN(colVal) || colVal < 1 || colVal > finalBox.cols) {
-        setValidationError(`Column must be a number between 1 and ${finalBox.cols} for grid container.`);
-        return;
-      }
-
-      // Check collision with existing samples
-      const collision = allSamples.find(s => 
-        !s.isArchived &&
-        s.id !== sample?.id &&
-        s.boxId === finalBoxId &&
-        s.row === rowVal &&
-        s.col === colVal
-      );
-
-      if (collision) {
-        setValidationError(`Position Row ${rowVal}, Col ${colVal} is already occupied by "${collision.chemicalName}".`);
-        return;
-      }
-    }
-
-    const concentrationText = concentrationValue.trim()
-      ? `${concentrationValue.trim()} ${concentrationUnit}`.trim()
-      : "";
-    const volumeMassText = volumeValue.trim()
-      ? `${volumeValue.trim()} ${volumeUnit}`.trim()
-      : "";
-
-    const savedSample: Sample = {
+    const buildSampleBase = (): Sample => ({
       ...(formData as Sample),
-      id: sample?.id || `sample-${Date.now()}`,
       storageId: selectedStorage,
       shelfId: selectedShelf,
       rackId: selectedRack || null,
       drawerId: selectedDrawer || null,
       boxId: finalBoxId,
-      row: rowVal,
-      col: colVal,
-      qty: Number(formData.qty) || 1,
+      qty: 1,
       chemicalName: formData.chemicalName.trim(),
       casNumber: formData.casNumber?.trim() || "",
       itemType: formData.itemType?.trim() || "Sample",
-      concentration: concentrationText,
-      volumeMass: volumeMassText
+      concentration: concentrationValue.trim()
+        ? `${concentrationValue.trim()} ${concentrationUnit}`.trim()
+        : "",
+      volumeMass: volumeValue.trim()
+        ? `${volumeValue.trim()} ${volumeUnit}`.trim()
+        : "",
+    });
+
+    const existingLocations = new Set(
+      allSamples
+        .filter(s => !s.isArchived && s.id !== sample?.id && s.boxId === finalBoxId && s.row !== null && s.col !== null)
+        .map(s => `${s.row}-${s.col}`)
+    );
+
+    if (isGridBox) {
+      const startRow = Number(formData.row);
+      const startCol = Number(formData.col);
+
+      if (isNaN(startRow) || startRow < 1 || startRow > (finalBox?.rows || 0)) {
+        setValidationError(`Row must be a number between 1 and ${finalBox?.rows} for grid container.`);
+        return;
+      }
+      if (isNaN(startCol) || startCol < 1 || startCol > (finalBox?.cols || 0)) {
+        setValidationError(`Column must be a number between 1 and ${finalBox?.cols} for grid container.`);
+        return;
+      }
+
+      if (requestedQty === 1) {
+        const collision = allSamples.find(s =>
+          !s.isArchived &&
+          s.id !== sample?.id &&
+          s.boxId === finalBoxId &&
+          s.row === startRow &&
+          s.col === startCol
+        );
+
+        if (collision) {
+          setValidationError(`Position Row ${startRow}, Col ${startCol} is already occupied by "${collision.chemicalName}".`);
+          return;
+        }
+
+        const savedSample: Sample = {
+          ...buildSampleBase(),
+          id: sample?.id || `sample-${Date.now()}`,
+          row: startRow,
+          col: startCol,
+        };
+
+        onSave(savedSample);
+        return;
+      }
+
+      const allocatedPositions: Array<{ row: number; col: number }> = [];
+      let cursorRow = startRow;
+      let cursorCol = startCol;
+      const maxPositions = (finalBox?.rows || 0) * (finalBox?.cols || 0);
+
+      while (allocatedPositions.length < requestedQty && allocatedPositions.length < maxPositions) {
+        const key = `${cursorRow}-${cursorCol}`;
+        if (!existingLocations.has(key)) {
+          allocatedPositions.push({ row: cursorRow, col: cursorCol });
+          existingLocations.add(key);
+        }
+
+        cursorCol += 1;
+        if (cursorCol > (finalBox?.cols || 0)) {
+          cursorCol = 1;
+          cursorRow += 1;
+        }
+        if (cursorRow > (finalBox?.rows || 0)) {
+          cursorRow = 1;
+        }
+      }
+
+      if (allocatedPositions.length < requestedQty) {
+        setValidationError(`Only ${allocatedPositions.length} unique position(s) are available in this box.`);
+        return;
+      }
+
+      const savedSamples: Sample[] = allocatedPositions.map((pos, index) => ({
+        ...buildSampleBase(),
+        id: sample?.id && index === 0 ? sample.id : `sample-${Date.now()}-${index + 1}`,
+        row: pos.row,
+        col: pos.col,
+      }));
+
+      onSave(savedSamples);
+      return;
+    }
+
+    const savedSample: Sample = {
+      ...buildSampleBase(),
+      id: sample?.id || `sample-${Date.now()}`,
+      boxId: finalBoxId,
+      row: finalBox && finalBox.rows && finalBox.cols ? Number(formData.row) : null,
+      col: finalBox && finalBox.rows && finalBox.cols ? Number(formData.col) : null,
     };
 
     onSave(savedSample);
