@@ -43,8 +43,42 @@ const DEFAULT_USERS = [
 ];
 
 const CURRENT_USER_STORAGE_KEY = "inventory-current-user";
+const NAV_PATH_STORAGE_KEY = "inventory-nav-path";
+
+type StoredNavPath = {
+  storageId: string;
+  shelfId: string;
+  rackId: string;
+  drawerId: string;
+  boxId: string | null;
+};
+
+function readStoredNavPath(): StoredNavPath {
+  if (typeof window === "undefined") {
+    return { storageId: "", shelfId: "", rackId: "", drawerId: "", boxId: null };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(NAV_PATH_STORAGE_KEY);
+    if (!raw) {
+      return { storageId: "", shelfId: "", rackId: "", drawerId: "", boxId: null };
+    }
+
+    const parsed = JSON.parse(raw) as Partial<StoredNavPath>;
+    return {
+      storageId: typeof parsed.storageId === "string" ? parsed.storageId : "",
+      shelfId: typeof parsed.shelfId === "string" ? parsed.shelfId : "",
+      rackId: typeof parsed.rackId === "string" ? parsed.rackId : "",
+      drawerId: typeof parsed.drawerId === "string" ? parsed.drawerId : "",
+      boxId: typeof parsed.boxId === "string" ? parsed.boxId : null,
+    };
+  } catch {
+    return { storageId: "", shelfId: "", rackId: "", drawerId: "", boxId: null };
+  }
+}
 
 export default function App() {
+  const initialNavPath = readStoredNavPath();
   const storageTypeOrder: Record<StorageUnit["type"], number> = {
     freezer: 0,
     refrigerator: 1,
@@ -74,11 +108,11 @@ export default function App() {
   });
 
   // Active navigation/selection paths
-  const [selectedStorageId, setSelectedStorageId] = useState<string>("");
-  const [selectedShelfId, setSelectedShelfId] = useState<string>("");
-  const [selectedRackId, setSelectedRackId] = useState<string>("");
-  const [selectedDrawerId, setSelectedDrawerId] = useState<string>("");
-  const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
+  const [selectedStorageId, setSelectedStorageId] = useState<string>(initialNavPath.storageId);
+  const [selectedShelfId, setSelectedShelfId] = useState<string>(initialNavPath.shelfId);
+  const [selectedRackId, setSelectedRackId] = useState<string>(initialNavPath.rackId);
+  const [selectedDrawerId, setSelectedDrawerId] = useState<string>(initialNavPath.drawerId);
+  const [selectedBoxId, setSelectedBoxId] = useState<string | null>(initialNavPath.boxId);
 
   // Inspector and modal triggers
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
@@ -327,17 +361,70 @@ export default function App() {
         };
         setState(normalized);
 
-        // Auto select first storage unit if none selected, showing its shelves grid view
-        if (normalized.storageUnits.length > 0 && !selectedStorageId) {
-          const firstStorage = normalized.storageUnits.find((u: any) => !u.isArchived);
-          if (firstStorage) {
-            setSelectedStorageId(firstStorage.id);
-            setSelectedShelfId("");
-            setSelectedRackId("");
-            setSelectedDrawerId("");
-            setSelectedBoxId(null);
+        // Restore stored navigation path when valid; otherwise fallback gracefully.
+        const activeStorages = normalized.storageUnits.filter((u: any) => !u.isArchived);
+        let nextStorageId = selectedStorageId;
+        let nextShelfId = selectedShelfId;
+        let nextRackId = selectedRackId;
+        let nextDrawerId = selectedDrawerId;
+        let nextBoxId = selectedBoxId;
+
+        const activeBox = nextBoxId
+          ? normalized.boxes.find((b: any) => b.id === nextBoxId && !b.isArchived)
+          : null;
+        if (activeBox) {
+          nextStorageId = activeBox.storageId;
+          nextShelfId = activeBox.shelfId;
+          nextRackId = activeBox.rackId || "";
+          nextDrawerId = activeBox.drawerId || "";
+        } else {
+          nextBoxId = null;
+
+          const activeDrawer = nextDrawerId
+            ? normalized.drawers.find((d: any) => d.id === nextDrawerId && !d.isArchived)
+            : null;
+          if (activeDrawer) {
+            nextStorageId = activeDrawer.storageId;
+            nextShelfId = activeDrawer.shelfId;
+            nextRackId = activeDrawer.rackId;
+          } else {
+            nextDrawerId = "";
+
+            const activeRack = nextRackId
+              ? normalized.racks.find((r: any) => r.id === nextRackId && !r.isArchived)
+              : null;
+            if (activeRack) {
+              nextStorageId = activeRack.storageId;
+              nextShelfId = activeRack.shelfId;
+            } else {
+              nextRackId = "";
+
+              const activeShelf = nextShelfId
+                ? normalized.shelves.find((s: any) => s.id === nextShelfId && !s.isArchived)
+                : null;
+              if (activeShelf) {
+                nextStorageId = activeShelf.storageId;
+              } else {
+                nextShelfId = "";
+              }
+            }
           }
         }
+
+        if (!nextStorageId || !activeStorages.some((u: any) => u.id === nextStorageId)) {
+          const firstStorage = activeStorages[0];
+          nextStorageId = firstStorage ? firstStorage.id : "";
+          nextShelfId = "";
+          nextRackId = "";
+          nextDrawerId = "";
+          nextBoxId = null;
+        }
+
+        if (nextStorageId !== selectedStorageId) setSelectedStorageId(nextStorageId);
+        if (nextShelfId !== selectedShelfId) setSelectedShelfId(nextShelfId);
+        if (nextRackId !== selectedRackId) setSelectedRackId(nextRackId);
+        if (nextDrawerId !== selectedDrawerId) setSelectedDrawerId(nextDrawerId);
+        if (nextBoxId !== selectedBoxId) setSelectedBoxId(nextBoxId);
       }
     } catch (err) {
       console.error("Failed to load inventory:", err);
@@ -366,6 +453,21 @@ export default function App() {
       window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, currentUser);
     }
   }, [currentUser]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    window.localStorage.setItem(
+      NAV_PATH_STORAGE_KEY,
+      JSON.stringify({
+        storageId: selectedStorageId,
+        shelfId: selectedShelfId,
+        rackId: selectedRackId,
+        drawerId: selectedDrawerId,
+        boxId: selectedBoxId,
+      })
+    );
+  }, [selectedStorageId, selectedShelfId, selectedRackId, selectedDrawerId, selectedBoxId]);
 
   // Save changes to backend server
   const saveStateToServer = async (updatedState: InventoryState, logAction: string, logDesc: string) => {
