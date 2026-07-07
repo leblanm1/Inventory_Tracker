@@ -5691,6 +5691,11 @@ export default function App() {
         racks={state.racks}
         drawers={state.drawers}
         boxes={state.boxes}
+        defaultStorageId={selectedStorageId}
+        defaultShelfId={selectedShelfId}
+        defaultRackId={selectedRackId}
+        defaultDrawerId={selectedDrawerId}
+        defaultBoxId={selectedBoxId}
         onConfirmMove={handleConfirmBulkMove}
       />
 

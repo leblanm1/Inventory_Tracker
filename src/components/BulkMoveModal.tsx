@@ -12,6 +12,11 @@ interface BulkMoveModalProps {
   racks: Rack[];
   drawers: Drawer[];
   boxes: Box[];
+  defaultStorageId?: string;
+  defaultShelfId?: string;
+  defaultRackId?: string;
+  defaultDrawerId?: string;
+  defaultBoxId?: string | null;
   onConfirmMove: (destination: {
     storageId: string;
     shelfId: string;
@@ -31,6 +36,11 @@ export default function BulkMoveModal({
   racks,
   drawers,
   boxes,
+  defaultStorageId,
+  defaultShelfId,
+  defaultRackId,
+  defaultDrawerId,
+  defaultBoxId,
   onConfirmMove
 }: BulkMoveModalProps) {
   const [selectedStorage, setSelectedStorage] = useState("");
@@ -40,78 +50,50 @@ export default function BulkMoveModal({
   const [selectedBox, setSelectedBox] = useState("");
   const [validationError, setValidationError] = useState("");
 
-  const activeStorageUnits = storageUnits.filter(u => !u.isArchived);
+  const activeStorageUnits = React.useMemo(() => storageUnits.filter(u => !u.isArchived), [storageUnits]);
 
   // Initialize selections when modal opens
   useEffect(() => {
     if (isOpen) {
       setValidationError("");
-      const defaultStorage = activeStorageUnits[0]?.id || "";
-      setSelectedStorage(defaultStorage);
-      setSelectedShelf("");
-      setSelectedRack("");
-      setSelectedDrawer("");
-      setSelectedBox("");
+      const storageId = defaultStorageId || activeStorageUnits[0]?.id || "";
+      setSelectedStorage(storageId);
+      setSelectedShelf(defaultShelfId || "");
+      setSelectedRack(defaultRackId || "");
+      setSelectedDrawer(defaultDrawerId || "");
+      setSelectedBox(defaultBoxId || "");
     }
-  }, [isOpen]);
+  }, [isOpen, defaultStorageId, defaultShelfId, defaultRackId, defaultDrawerId, defaultBoxId, storageUnits]);
 
-  // Cascading update for shelves when storage changes
-  useEffect(() => {
-    if (selectedStorage) {
-      const validShelves = shelves.filter(s => s.storageId === selectedStorage && !s.isArchived);
-      if (validShelves.length > 0) {
-        setSelectedShelf(validShelves[0].id);
-      } else {
-        setSelectedShelf("");
-      }
-    } else {
-      setSelectedShelf("");
-    }
+  const handleStorageChange = (storageId: string) => {
+    setSelectedStorage(storageId);
+    setSelectedShelf("");
     setSelectedRack("");
     setSelectedDrawer("");
     setSelectedBox("");
-  }, [selectedStorage, shelves]);
+  };
 
-  // Cascading update for racks when shelf changes
-  useEffect(() => {
-    if (selectedShelf) {
-      const validRacks = racks.filter(r => r.shelfId === selectedShelf && !r.isArchived);
-      if (validRacks.length > 0) {
-        // Racks are optional for boxes/samples, required for drawers
-        if (itemType === "drawer") {
-          setSelectedRack(validRacks[0].id);
-        } else {
-          setSelectedRack("");
-        }
-      } else {
-        setSelectedRack("");
-      }
-    } else {
-      setSelectedRack("");
-    }
+  const handleShelfChange = (shelfId: string) => {
+    setSelectedShelf(shelfId);
+    setSelectedRack("");
     setSelectedDrawer("");
     setSelectedBox("");
-  }, [selectedShelf, racks, itemType]);
+  };
 
-  // Cascading update for drawers when rack changes
-  useEffect(() => {
-    if (selectedRack) {
-      const validDrawers = drawers.filter(d => d.rackId === selectedRack && !d.isArchived);
-      if (validDrawers.length > 0) {
-        setSelectedDrawer("");
-      } else {
-        setSelectedDrawer("");
-      }
-    } else {
-      setSelectedDrawer("");
-    }
+  const handleRackChange = (rackId: string) => {
+    setSelectedRack(rackId);
+    setSelectedDrawer("");
     setSelectedBox("");
-  }, [selectedRack, drawers]);
+  };
 
-  // Cascading update for boxes when drawer or rack or shelf changes
-  useEffect(() => {
+  const handleDrawerChange = (drawerId: string) => {
+    setSelectedDrawer(drawerId);
     setSelectedBox("");
-  }, [selectedDrawer, selectedRack, selectedShelf]);
+  };
+
+  const handleBoxChange = (boxId: string) => {
+    setSelectedBox(boxId);
+  };
 
   if (!isOpen) return null;
 
@@ -192,7 +174,7 @@ export default function BulkMoveModal({
             </label>
             <select
               value={selectedStorage}
-              onChange={e => setSelectedStorage(e.target.value)}
+              onChange={e => handleStorageChange(e.target.value)}
               className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 text-xs font-semibold outline-hidden cursor-pointer"
             >
               <option value="">-- Select Storage Unit --</option>
@@ -210,7 +192,7 @@ export default function BulkMoveModal({
               </label>
               <select
                 value={selectedShelf}
-                onChange={e => setSelectedShelf(e.target.value)}
+                onChange={e => handleShelfChange(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 text-xs font-semibold outline-hidden cursor-pointer"
               >
                 <option value="">-- Select Shelf Level --</option>
@@ -229,7 +211,7 @@ export default function BulkMoveModal({
               </label>
               <select
                 value={selectedRack}
-                onChange={e => setSelectedRack(e.target.value)}
+                onChange={e => handleRackChange(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 text-xs font-semibold outline-hidden cursor-pointer"
               >
                 <option value="">{itemType === "drawer" ? "-- Select Rack --" : "-- Direct in Shelf (No Rack) --"}</option>
@@ -248,7 +230,7 @@ export default function BulkMoveModal({
               </label>
               <select
                 value={selectedDrawer}
-                onChange={e => setSelectedDrawer(e.target.value)}
+                onChange={e => handleDrawerChange(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 text-xs font-semibold outline-hidden cursor-pointer"
               >
                 <option value="">-- Direct in Rack (No Drawer) --</option>
@@ -267,7 +249,7 @@ export default function BulkMoveModal({
               </label>
               <select
                 value={selectedBox}
-                onChange={e => setSelectedBox(e.target.value)}
+                onChange={e => handleBoxChange(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 text-xs font-semibold outline-hidden cursor-pointer"
               >
                 <option value="">-- Direct on Shelf / Drawer (No Box) --</option>
