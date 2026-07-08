@@ -4,6 +4,8 @@ import path from "path";
 import fs from "fs/promises";
 import { existsSync } from "fs";
 import net from "node:net";
+import { createHash } from "node:crypto";
+import ExcelJS from "exceljs";
 import { createServer as createViteServer } from "vite";
 import { InventoryState, StorageUnit, Shelf, Box, Sample, AuditLog, Rack, Drawer } from "./src/types.js";
 
@@ -13,6 +15,8 @@ const LEGACY_DATA_DIR = path.join(__dirname, "data");
 const DATA_DIR = process.env.INVENTORY_DATA_DIR || path.join(os.homedir(), "Library", "Application Support", "Sousa Lab Inventory");
 const DATA_FILE = path.join(DATA_DIR, "inventory.json");
 const SNAPSHOT_ARCHIVE_FILE = path.join(DATA_DIR, "audit-snapshots.json");
+const IMMUTABLE_BACKUP_DIR = path.join(DATA_DIR, "immutable-backups");
+const IMMUTABLE_BACKUP_MANIFEST = path.join(IMMUTABLE_BACKUP_DIR, "manifest.jsonl");
 const LEGACY_DATA_FILE = path.join(LEGACY_DATA_DIR, "inventory.json");
 const LEGACY_SNAPSHOT_ARCHIVE_FILE = path.join(LEGACY_DATA_DIR, "audit-snapshots.json");
 const DEFAULT_USERS = [
@@ -47,6 +51,150 @@ function mergeSnapshots(
   ]
     .sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""))
     .slice(0, limit);
+}
+
+function getDateStamp(date: Date = new Date()): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function getImmutableBackupPathForDate(date: Date = new Date()): string {
+  return path.join(IMMUTABLE_BACKUP_DIR, `inventory-${getDateStamp(date)}.json`);
+}
+
+function getImmutableExcelBackupPathForDate(date: Date = new Date()): string {
+  return path.join(IMMUTABLE_BACKUP_DIR, `inventory-${getDateStamp(date)}.xlsx`);
+}
+
+function addJsonSheet(workbook: ExcelJS.Workbook, sheetName: string, rows: Record<string, unknown>[]): void {
+  const worksheet = workbook.addWorksheet(sheetName);
+  const normalizedRows = rows ?? [];
+
+  const headers = Array.from(
+    normalizedRows.reduce((set, row) => {
+      Object.keys(row || {}).forEach((key) => set.add(key));
+      return set;
+    }, new Set<string>())
+  );
+
+  if (headers.length === 0) {
+    worksheet.addRow(["No data"]);
+    return;
+  }
+
+  worksheet.columns = headers.map((header) => ({ header, key: header, width: 24 }));
+  normalizedRows.forEach((row) => {
+    const output: Record<string, unknown> = {};
+    headers.forEach((header) => {
+      const value = row?.[header];
+      output[header] = value == null ? "" : typeof value === "object" ? JSON.stringify(value) : value;
+    });
+    worksheet.addRow(output);
+  });
+}
+
+async function buildWorkbookBufferFromState(state: InventoryState): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Sousa Lab Inventory";
+  workbook.created = new Date();
+
+  addJsonSheet(workbook, "Users", state.users.map((name) => ({ name })));
+  addJsonSheet(workbook, "StorageUnits", state.storageUnits as unknown as Record<string, unknown>[]);
+  addJsonSheet(workbook, "Shelves", state.shelves as unknown as Record<string, unknown>[]);
+  addJsonSheet(workbook, "Racks", state.racks as unknown as Record<string, unknown>[]);
+  addJsonSheet(workbook, "Drawers", state.drawers as unknown as Record<string, unknown>[]);
+  addJsonSheet(workbook, "Boxes", state.boxes as unknown as Record<string, unknown>[]);
+  addJsonSheet(workbook, "Samples", state.samples as unknown as Record<string, unknown>[]);
+  addJsonSheet(workbook, "AuditLogs", state.auditLogs as unknown as Record<string, unknown>[]);
+  addJsonSheet(workbook, "AuditSnapshots", state.auditSnapshots as unknown as Record<string, unknown>[]);
+
+  const out = await workbook.xlsx.writeBuffer();
+  return Buffer.from(out);
+}
+
+async function appendImmutableBackupManifest(backupPath: string, content: string | Buffer): Promise<void> {
+  try {
+    const entry = {
+      file: path.basename(backupPath),
+      createdAt: new Date().toISOString(),
+      sha256: createHash("sha256").update(content).digest("hex")
+    };
+    await fs.appendFile(IMMUTABLE_BACKUP_MANIFEST, `${JSON.stringify(entry)}\n`, "utf-8");
+  } catch (err) {
+    console.error("Error appending immutable backup manifest:", err);
+  }
+}
+
+async function ensureDailyImmutableBackup(): Promise<boolean> {
+  try {
+    await migrateLegacyDataIfNeeded();
+    if (!existsSync(DATA_DIR)) {
+      await fs.mkdir(DATA_DIR, { recursive: true });
+    }
+    if (!existsSync(DATA_FILE)) {
+      const seedState = getDemoState();
+      await fs.writeFile(DATA_FILE, JSON.stringify(seedState, null, 2), "utf-8");
+    }
+
+    if (!existsSync(IMMUTABLE_BACKUP_DIR)) {
+      await fs.mkdir(IMMUTABLE_BACKUP_DIR, { recursive: true });
+    }
+
+    const backupPath = getImmutableBackupPathForDate();
+    const excelBackupPath = getImmutableExcelBackupPathForDate();
+    if (existsSync(backupPath) && existsSync(excelBackupPath)) {
+      return false;
+    }
+
+    const rawContent = await fs.readFile(DATA_FILE, "utf-8");
+    const parsedState = JSON.parse(rawContent) as InventoryState;
+    const normalizedContent = JSON.stringify(parsedState, null, 2);
+    const workbookBuffer = await buildWorkbookBufferFromState(parsedState);
+
+    // "wx" guarantees the app cannot overwrite an existing backup file.
+    if (!existsSync(backupPath)) {
+      await fs.writeFile(backupPath, normalizedContent, { encoding: "utf-8", flag: "wx" });
+
+      try {
+        // Best-effort read-only lock at the file level.
+        await fs.chmod(backupPath, 0o444);
+      } catch (chmodErr) {
+        console.warn("JSON backup created, but read-only permission could not be applied:", chmodErr);
+      }
+
+      await appendImmutableBackupManifest(backupPath, normalizedContent);
+    }
+
+    if (!existsSync(excelBackupPath)) {
+      await fs.writeFile(excelBackupPath, workbookBuffer, { flag: "wx" });
+
+      try {
+        // Best-effort read-only lock at the file level.
+        await fs.chmod(excelBackupPath, 0o444);
+      } catch (chmodErr) {
+        console.warn("Excel backup created, but read-only permission could not be applied:", chmodErr);
+      }
+
+      await appendImmutableBackupManifest(excelBackupPath, workbookBuffer);
+    }
+
+    console.log(`Immutable daily backups ensured: ${backupPath} and ${excelBackupPath}`);
+    return true;
+  } catch (err) {
+    console.error("Error creating immutable daily backup:", err);
+    return false;
+  }
+}
+
+function scheduleDailyImmutableBackups(): void {
+  void ensureDailyImmutableBackup();
+
+  const oneHourMs = 60 * 60 * 1000;
+  const timer = setInterval(() => {
+    void ensureDailyImmutableBackup();
+  }, oneHourMs);
+
+  // Do not keep Node alive solely for the backup scheduler.
+  timer.unref();
 }
 
 async function loadSnapshotArchive(): Promise<SnapshotRecord[]> {
@@ -430,6 +578,8 @@ async function startServer() {
   const hmrPortFromEnv = Number(process.env.HMR_PORT);
   const requestedHmrPort = Number.isFinite(hmrPortFromEnv) && hmrPortFromEnv > 0 ? hmrPortFromEnv : 24678;
   const HMR_PORT = isDev ? await findAvailablePort(requestedHmrPort) : requestedHmrPort;
+
+  scheduleDailyImmutableBackups();
 
   if (isDev && PORT !== requestedPort) {
     console.warn(`Port ${requestedPort} is busy, using ${PORT} instead.`);
