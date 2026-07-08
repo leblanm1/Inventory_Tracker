@@ -1,0 +1,12 @@
+{
+  "sourceFile": "manifest.jsonl",
+  "createdAt": "2026-07-08T18:28:01.941Z",
+  "sha256Raw": "c6b1f80b371e37d864119bdfdf3783438eab042673ab174e29477741dd5869b4",
+  "sha256Gzip": "1729454ec0ddbde35da1e493bbbcc2923e12503141d13fdd88bd93b077f5fce1",
+  "rawBytes": 304,
+  "gzipBytes": 202,
+  "chunked": false,
+  "parts": [
+    "manifest.jsonl.gz"
+  ]
+}
