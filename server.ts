@@ -15,7 +15,7 @@ const LEGACY_DATA_DIR = path.join(__dirname, "data");
 const DATA_DIR = process.env.INVENTORY_DATA_DIR || path.join(os.homedir(), "Library", "Application Support", "Sousa Lab Inventory");
 const DATA_FILE = path.join(DATA_DIR, "inventory.json");
 const SNAPSHOT_ARCHIVE_FILE = path.join(DATA_DIR, "audit-snapshots.json");
-const IMMUTABLE_BACKUP_DIR = path.join(DATA_DIR, "immutable-backups");
+const IMMUTABLE_BACKUP_DIR = process.env.INVENTORY_IMMUTABLE_BACKUP_DIR || path.join(DATA_DIR, "immutable-backups");
 const IMMUTABLE_BACKUP_MANIFEST = path.join(IMMUTABLE_BACKUP_DIR, "manifest.jsonl");
 const LEGACY_DATA_FILE = path.join(LEGACY_DATA_DIR, "inventory.json");
 const LEGACY_SNAPSHOT_ARCHIVE_FILE = path.join(LEGACY_DATA_DIR, "audit-snapshots.json");
@@ -724,4 +724,18 @@ async function startServer() {
   });
 }
 
-startServer();
+async function main(): Promise<void> {
+  if (process.argv.includes("--backup-now")) {
+    const created = await ensureDailyImmutableBackup();
+    if (created) {
+      console.log("Backup run completed: created today's immutable backups.");
+    } else {
+      console.log("Backup run completed: today's immutable backups already exist.");
+    }
+    return;
+  }
+
+  await startServer();
+}
+
+void main();
