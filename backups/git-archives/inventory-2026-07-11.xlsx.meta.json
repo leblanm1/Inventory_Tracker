@@ -1,0 +1,12 @@
+{
+  "sourceFile": "inventory-2026-07-11.xlsx",
+  "createdAt": "2026-07-11T05:30:28.809Z",
+  "sha256Raw": "c0374a19cef35a70527cbbaa0b5b844ad2282ac9a863efcf29586dc6bde92107",
+  "sha256Gzip": "1d9e497554be01f4b26067105aaa6ef1c25a12a95d249554648cbe3e503b8a95",
+  "rawBytes": 5180024,
+  "gzipBytes": 4443848,
+  "chunked": false,
+  "parts": [
+    "inventory-2026-07-11.xlsx.gz"
+  ]
+}
