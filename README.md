@@ -10,6 +10,10 @@ Commands:
 1. Install dependencies: `cmd /c npm install`
 2. Start dev server: `cmd /c npm run dev`
 
+Note:
+- In Windows PowerShell, running bare `npm install` can be blocked by script execution policy. Use `cmd /c npm install` from the repo root.
+- You may see `allow-scripts` warnings during install; in this repo they are informational and do not stop a successful install.
+
 ## Immutable Daily Backups
 
 The server creates daily immutable backups (JSON + Excel).
@@ -54,13 +58,24 @@ Why compressed git archives:
 
 ## Windows Task Scheduler (Daily)
 
-Create a daily scheduled task:
-- `powershell -ExecutionPolicy Bypass -File scripts/register-daily-backup-task.ps1 -Time 23:30`
+Create a daily scheduled task at 7:00 AM:
+- `powershell -ExecutionPolicy Bypass -File scripts/register-daily-backup-task.ps1 -Time 07:00`
+
+What the scheduled task now does:
+1. Runs the immutable backup + git archive push workflow (`npm run backup:git`).
+2. Checks whether the inventory server is already running.
+3. Starts `npm run dev` only if the server is not detected.
+4. A fallback task runs at 7:05 AM in check-only mode to ensure the server is up even if the backup task hangs.
 
 Useful parameters:
 - `-TaskName "InventoryDailyImmutableBackupGit"`
-- `-Time "23:30"`
+- `-Time "07:00"`
+- `-FallbackTaskName "InventoryDailyEnsureRunning"`
+- `-FallbackTime "07:05"`
 - `-RepoPath "C:\Invetory_Tracker"`
+
+Optional manual run of the same maintenance flow:
+- `powershell -ExecutionPolicy Bypass -File scripts/morning-maintenance.ps1 -RepoPath "C:\Invetory_Tracker" -Port 3000`
 
 ## Secure Branch Strategy (Recommended)
 

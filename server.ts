@@ -570,6 +570,7 @@ async function findAvailablePort(startPort: number, maxAttempts = 50): Promise<n
 
 async function startServer() {
   const app = express();
+  const browserHost = "localhost";
   const portFromEnv = Number(process.env.PORT);
   const requestedPort = Number.isFinite(portFromEnv) && portFromEnv > 0 ? portFromEnv : 3000;
   const isDev = process.env.NODE_ENV !== "production";
@@ -704,7 +705,7 @@ async function startServer() {
         hmr: {
           port: HMR_PORT,
           clientPort: HMR_PORT,
-          host: "0.0.0.0"
+          host: browserHost
         }
       },
       appType: "spa",
@@ -720,7 +721,7 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Lab Inventory Tracker server running on http://0.0.0.0:${PORT}`);
+    console.log(`Lab Inventory Tracker server running on http://${browserHost}:${PORT}`);
   });
 }
 
