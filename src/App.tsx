@@ -13,10 +13,8 @@ import {
   Layers, 
   Box as BoxIcon, 
   ArrowRight, 
-  History, 
   User, 
   Check, 
-  AlertTriangle, 
   X, 
   Server, 
   Grid, 
@@ -26,14 +24,26 @@ import {
   FileText,
   Move,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  QrCode,
+  ScanLine,
+  Menu,
+  PanelRightClose,
+  PanelRightOpen
 } from "lucide-react";
 import { StorageUnit, Shelf, Box, Sample, AuditLog, InventoryState, Rack, Drawer, AuditSnapshot } from "./types.js";
 import { convertSamplesToCSV } from "./utils.js";
+import { initAuth, authFetch } from "./auth.js";
+import { getExpiryStatus, getExpiryColorClass, getExpiryBadgeClass, getExpiryLabel, getDaysUntilExpiry, isLowStock, getGHSPictograms, GHS_PICTOGRAM_SYMBOLS, GHS_PICTOGRAM_LABELS, checkCompatibility, isIncompatible } from "./labUtils.js";
+import Fuse from "fuse.js";
 import SampleFormModal from "./components/SampleFormModal.jsx";
 import StorageFormModal from "./components/StorageFormModal.jsx";
 import BulkImportPanel from "./components/BulkImportPanel.jsx";
 import BulkMoveModal from "./components/BulkMoveModal.jsx";
+import DashboardPanels from "./components/DashboardPanels.jsx";
+import SampleInspector from "./components/SampleInspector.jsx";
+import AuditTrailModal from "./components/AuditTrailModal.jsx";
+import { generateAllBoxQRLabels, printQRLabels } from "./qrUtils.js";
 
 const DEFAULT_USERS = [
   "Dr. Aris (Lab Director)",
@@ -122,6 +132,10 @@ export default function App() {
   const [showTrash, setShowTrash] = useState(false);
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [showAuditTrailModal, setShowAuditTrailModal] = useState(false);
+  const [scanInput, setScanInput] = useState("");
+  const [isGeneratingQR, setIsGeneratingQR] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [auditSearch, setAuditSearch] = useState("");
 
   // Bulk selection/actions
@@ -152,7 +166,8 @@ export default function App() {
   const [structureMinimized, setStructureMinimized] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [listFilter, setListFilter] = useState<"all" | "loose">("all");
-  const [sortField, setSortField] = useState<"chemicalName" | "casNumber" | "qty" | "itemType" | "location">("chemicalName");
+  const [expiryFilter, setExpiryFilter] = useState<"none" | "expired" | "expiring" | "lowstock">("none");
+  const [sortField, setSortField] = useState<"chemicalName" | "casNumber" | "qty" | "itemType" | "location" | "expiresOn">("chemicalName");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [collapsedStorageTypes, setCollapsedStorageTypes] = useState<Record<StorageUnit["type"], boolean>>({
     freezer: false,
@@ -353,7 +368,7 @@ export default function App() {
   const fetchState = async () => {
     try {
       setSyncing(true);
-      const res = await fetch("/api/inventory");
+      const res = await authFetch("/api/inventory");
       if (res.ok) {
         const data = await res.json();
         const normalized = {
@@ -446,7 +461,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchState();
+    initAuth().then(() => fetchState());
   }, []);
 
   useEffect(() => {
@@ -478,6 +493,44 @@ export default function App() {
         boxId: selectedBoxId,
       })
     );
+  }, [selectedStorageId, selectedShelfId, selectedRackId, selectedDrawerId, selectedBoxId]);
+
+  // QR code URL param navigation: on initial load, check for ?boxId= or ?sampleId=
+  // and navigate directly to the matching box grid view or sample inspector.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const boxIdParam = params.get("boxId");
+    const sampleIdParam = params.get("sampleId");
+
+    if (boxIdParam && state.boxes.length > 0) {
+      const box = state.boxes.find(b => b.id === boxIdParam && !b.isArchived);
+      if (box) {
+        setSelectedStorageId(box.storageId);
+        setSelectedShelfId(box.shelfId);
+        if (box.rackId) setSelectedRackId(box.rackId);
+        if (box.drawerId) setSelectedDrawerId(box.drawerId);
+        setSelectedBoxId(box.id);
+        // Clean the URL so it doesn't re-trigger on refresh
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+    } else if (sampleIdParam && state.samples.length > 0) {
+      const sample = state.samples.find(s => s.id === sampleIdParam);
+      if (sample) {
+        setSelectedStorageId(sample.storageId);
+        setSelectedShelfId(sample.shelfId);
+        if (sample.rackId) setSelectedRackId(sample.rackId);
+        if (sample.drawerId) setSelectedDrawerId(sample.drawerId);
+        if (sample.boxId) setSelectedBoxId(sample.boxId);
+        setSelectedSampleId(sample.id);
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+    }
+  }, [state.boxes, state.samples]); // Run once when data is loaded
+
+  // Close mobile sidebar when navigation path changes
+  useEffect(() => {
+    setSidebarOpen(false);
   }, [selectedStorageId, selectedShelfId, selectedRackId, selectedDrawerId, selectedBoxId]);
 
   // Save changes to backend server with optimistic concurrency control.
@@ -535,7 +588,7 @@ export default function App() {
       const attemptSave = async (baseState: InventoryState, currentVersion: number): Promise<boolean> => {
         const { finalState, payloadForServer } = buildPayload(baseState, currentVersion);
 
-        const res = await fetch("/api/inventory", {
+        const res = await authFetch("/api/inventory", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payloadForServer)
@@ -556,7 +609,7 @@ export default function App() {
             : currentVersion;
 
           // Re-fetch the latest server state to get a clean baseline.
-          const freshRes = await fetch("/api/inventory");
+          const freshRes = await authFetch("/api/inventory");
           if (!freshRes.ok) {
             console.error("Version conflict and failed to re-fetch server state.");
             return false;
@@ -626,7 +679,7 @@ export default function App() {
       setSyncing(true);
 
       const attempt = async (version: number): Promise<InventoryState | null> => {
-        const res = await fetch(endpoint, {
+        const res = await authFetch(endpoint, {
           method,
           headers: {
             "Content-Type": "application/json",
@@ -653,7 +706,7 @@ export default function App() {
             ? conflictData.serverVersion
             : version;
 
-          const freshRes = await fetch("/api/inventory");
+          const freshRes = await authFetch("/api/inventory");
           if (!freshRes.ok) {
             console.error("Version conflict and failed to re-fetch server state.");
             return null;
@@ -812,16 +865,6 @@ export default function App() {
     handleRestoreFromSnapshot(previousSnapshot.id);
   };
 
-  const filteredAuditLogs = useMemo(() => {
-    const query = auditSearch.trim().toLowerCase();
-    if (!query) return state.auditLogs;
-    return state.auditLogs.filter(log =>
-      log.action.toLowerCase().includes(query) ||
-      log.description.toLowerCase().includes(query) ||
-      log.user.toLowerCase().includes(query)
-    );
-  }, [state.auditLogs, auditSearch]);
-
   // Helper to trigger full CSV backup download
   const handleCSVExport = () => {
     const activeSamples = state.samples.filter(s => !s.isArchived);
@@ -850,7 +893,7 @@ export default function App() {
           return;
         }
 
-        const res = await fetch(`/api/import?user=${encodeURIComponent(currentUser)}`, {
+        const res = await authFetch(`/api/import?user=${encodeURIComponent(currentUser)}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(parsed)
@@ -1022,8 +1065,20 @@ export default function App() {
   const sortedShelfSamples = useMemo(() => {
     if (!currentShelf) return [];
     const shelfSamps = state.samples.filter(s => s.shelfId === currentShelf.id && !s.isArchived);
-    const filtered = listFilter === "loose" ? shelfSamps.filter(s => !s.boxId) : shelfSamps;
-    
+    let filtered = listFilter === "loose" ? shelfSamps.filter(s => !s.boxId) : shelfSamps;
+
+    // Apply expiry/stock filters
+    if (expiryFilter === "expired") {
+      filtered = filtered.filter(s => getExpiryStatus(s) === "expired");
+    } else if (expiryFilter === "expiring") {
+      filtered = filtered.filter(s => {
+        const st = getExpiryStatus(s);
+        return st === "expired" || st === "critical" || st === "warning" || st === "soon";
+      });
+    } else if (expiryFilter === "lowstock") {
+      filtered = filtered.filter(s => isLowStock(s));
+    }
+
     return [...filtered].sort((a, b) => {
       let aVal: any = "";
       let bVal: any = "";
@@ -1043,6 +1098,9 @@ export default function App() {
       } else if (sortField === "location") {
         aVal = getSampleLocationPath(a);
         bVal = getSampleLocationPath(b);
+      } else if (sortField === "expiresOn") {
+        aVal = a.expiresOn || "";
+        bVal = b.expiresOn || "";
       }
 
       if (typeof aVal === "string") {
@@ -1053,7 +1111,7 @@ export default function App() {
         return sortDirection === "asc" ? aVal - bVal : bVal - aVal;
       }
     });
-  }, [state.samples, currentShelf, listFilter, sortField, sortDirection]);
+  }, [state.samples, currentShelf, listFilter, expiryFilter, sortField, sortDirection]);
 
   // Sorted Samples in current storage unit
   const sortedStorageSamples = useMemo(() => {
@@ -1080,6 +1138,9 @@ export default function App() {
       } else if (sortField === "location") {
         aVal = getSampleLocationPath(a);
         bVal = getSampleLocationPath(b);
+      } else if (sortField === "expiresOn") {
+        aVal = a.expiresOn || "";
+        bVal = b.expiresOn || "";
       }
 
       if (typeof aVal === "string") {
@@ -1092,7 +1153,7 @@ export default function App() {
     });
   }, [state.samples, currentStorage, listFilter, sortField, sortDirection]);
 
-  const handleSort = (field: "chemicalName" | "casNumber" | "qty" | "itemType" | "location") => {
+  const handleSort = (field: "chemicalName" | "casNumber" | "qty" | "itemType" | "location" | "expiresOn") => {
     if (sortField === field) {
       setSortDirection(prev => (prev === "asc" ? "desc" : "asc"));
     } else {
@@ -1109,104 +1170,95 @@ export default function App() {
     | { kind: "drawer"; drawer: Drawer; rack?: Rack; shelf?: Shelf; storage?: StorageUnit }
     | { kind: "box"; box: Box; drawer?: Drawer; rack?: Rack; shelf?: Shelf; storage?: StorageUnit };
 
-  // Universal Filter / Search logic
+  // Universal Filter / Search logic — Fuse.js fuzzy search (review item 11)
+  // Create memoized Fuse instances for each entity type. Threshold 0.4 gives
+  // good typo tolerance without too many false positives.
+  const sampleFuse = useMemo(() => new Fuse(
+    state.samples.filter(s => !s.isArchived),
+    {
+      keys: [
+        "chemicalName", "casNumber", "itemType", "notes", "plasmidName",
+        "organism", "gene", "primaryDepositedBy", "catalogNum", "lot",
+      ],
+      threshold: 0.4,
+      ignoreLocation: true,
+      minMatchCharLength: 2,
+    }
+  ), [state.samples]);
+
+  const storageFuse = useMemo(() => new Fuse(
+    state.storageUnits.filter(u => !u.isArchived),
+    { keys: ["name", "type"], threshold: 0.4, ignoreLocation: true }
+  ), [state.storageUnits]);
+
+  const shelfFuse = useMemo(() => new Fuse(
+    state.shelves.filter(s => !s.isArchived),
+    { keys: ["name"], threshold: 0.4, ignoreLocation: true }
+  ), [state.shelves]);
+
+  const rackFuse = useMemo(() => new Fuse(
+    state.racks.filter(r => !r.isArchived),
+    { keys: ["name"], threshold: 0.4, ignoreLocation: true }
+  ), [state.racks]);
+
+  const drawerFuse = useMemo(() => new Fuse(
+    state.drawers.filter(d => !d.isArchived),
+    { keys: ["name"], threshold: 0.4, ignoreLocation: true }
+  ), [state.drawers]);
+
+  const boxFuse = useMemo(() => new Fuse(
+    state.boxes.filter(b => !b.isArchived),
+    { keys: ["name"], threshold: 0.4, ignoreLocation: true }
+  ), [state.boxes]);
+
   const searchResults = useMemo<SearchResult[]>(() => {
-    const query = searchQuery.toLowerCase().trim();
+    const query = searchQuery.trim();
     if (!query) return [];
 
-    const lowerIncludes = (...values: Array<string | undefined | null>) =>
-      values.some((v) => (v || "").toLowerCase().includes(query));
+    const sampleMatches: SearchResult[] = sampleFuse
+      .search(query)
+      .map(result => ({ kind: "sample" as const, sample: result.item }));
 
-    const sampleMatches: SearchResult[] = state.samples
-      .filter(s => {
-        if (s.isArchived) return false;
-        const storage = state.storageUnits.find(u => u.id === s.storageId && !u.isArchived);
-        const shelf = state.shelves.find(sh => sh.id === s.shelfId && !sh.isArchived);
-        const rack = s.rackId ? state.racks.find(r => r.id === s.rackId && !r.isArchived) : undefined;
-        const drawer = s.drawerId ? state.drawers.find(d => d.id === s.drawerId && !d.isArchived) : undefined;
-        const box = s.boxId ? state.boxes.find(b => b.id === s.boxId && !b.isArchived) : undefined;
-        return lowerIncludes(
-          s.chemicalName,
-          s.casNumber,
-          s.itemType,
-          s.notes,
-          s.plasmidName,
-          s.organism,
-          s.gene,
-          s.primaryDepositedBy,
-          s.catalogNum,
-          s.lot,
-          storage?.name,
-          shelf?.name,
-          rack?.name,
-          drawer?.name,
-          box?.name
-        );
-      })
-      .map(sample => ({ kind: "sample", sample }));
+    const storageMatches: SearchResult[] = storageFuse
+      .search(query)
+      .map(result => ({ kind: "storage" as const, storage: result.item }));
 
-    const storageMatches: SearchResult[] = state.storageUnits
-      .filter(storage => !storage.isArchived && lowerIncludes(storage.name, storage.type))
-      .map(storage => ({ kind: "storage", storage }));
-
-    const shelfMatches: SearchResult[] = state.shelves
-      .filter(shelf => {
-        if (shelf.isArchived) return false;
-        const storage = state.storageUnits.find(u => u.id === shelf.storageId);
-        return lowerIncludes(shelf.name, storage?.name);
-      })
-      .map(shelf => ({
-        kind: "shelf",
-        shelf,
-        storage: state.storageUnits.find(u => u.id === shelf.storageId)
+    const shelfMatches: SearchResult[] = shelfFuse
+      .search(query)
+      .map(result => ({
+        kind: "shelf" as const,
+        shelf: result.item,
+        storage: state.storageUnits.find(u => u.id === result.item.storageId)
       }));
 
-    const rackMatches: SearchResult[] = state.racks
-      .filter(rack => {
-        if (rack.isArchived) return false;
-        const shelf = state.shelves.find(s => s.id === rack.shelfId);
-        const storage = state.storageUnits.find(u => u.id === rack.storageId);
-        return lowerIncludes(rack.name, shelf?.name, storage?.name);
-      })
-      .map(rack => ({
-        kind: "rack",
-        rack,
-        shelf: state.shelves.find(s => s.id === rack.shelfId),
-        storage: state.storageUnits.find(u => u.id === rack.storageId)
+    const rackMatches: SearchResult[] = rackFuse
+      .search(query)
+      .map(result => ({
+        kind: "rack" as const,
+        rack: result.item,
+        shelf: state.shelves.find(s => s.id === result.item.shelfId),
+        storage: state.storageUnits.find(u => u.id === result.item.storageId)
       }));
 
-    const drawerMatches: SearchResult[] = state.drawers
-      .filter(drawer => {
-        if (drawer.isArchived) return false;
-        const rack = state.racks.find(r => r.id === drawer.rackId);
-        const shelf = state.shelves.find(s => s.id === drawer.shelfId);
-        const storage = state.storageUnits.find(u => u.id === drawer.storageId);
-        return lowerIncludes(drawer.name, rack?.name, shelf?.name, storage?.name);
-      })
-      .map(drawer => ({
-        kind: "drawer",
-        drawer,
-        rack: state.racks.find(r => r.id === drawer.rackId),
-        shelf: state.shelves.find(s => s.id === drawer.shelfId),
-        storage: state.storageUnits.find(u => u.id === drawer.storageId)
+    const drawerMatches: SearchResult[] = drawerFuse
+      .search(query)
+      .map(result => ({
+        kind: "drawer" as const,
+        drawer: result.item,
+        rack: state.racks.find(r => r.id === result.item.rackId),
+        shelf: state.shelves.find(s => s.id === result.item.shelfId),
+        storage: state.storageUnits.find(u => u.id === result.item.storageId)
       }));
 
-    const boxMatches: SearchResult[] = state.boxes
-      .filter(box => {
-        if (box.isArchived) return false;
-        const drawer = box.drawerId ? state.drawers.find(d => d.id === box.drawerId) : undefined;
-        const rack = box.rackId ? state.racks.find(r => r.id === box.rackId) : undefined;
-        const shelf = state.shelves.find(s => s.id === box.shelfId);
-        const storage = state.storageUnits.find(u => u.id === box.storageId);
-        return lowerIncludes(box.name, drawer?.name, rack?.name, shelf?.name, storage?.name);
-      })
-      .map(box => ({
-        kind: "box",
-        box,
-        drawer: box.drawerId ? state.drawers.find(d => d.id === box.drawerId) : undefined,
-        rack: box.rackId ? state.racks.find(r => r.id === box.rackId) : undefined,
-        shelf: state.shelves.find(s => s.id === box.shelfId),
-        storage: state.storageUnits.find(u => u.id === box.storageId)
+    const boxMatches: SearchResult[] = boxFuse
+      .search(query)
+      .map(result => ({
+        kind: "box" as const,
+        box: result.item,
+        drawer: result.item.drawerId ? state.drawers.find(d => d.id === result.item.drawerId) : undefined,
+        rack: result.item.rackId ? state.racks.find(r => r.id === result.item.rackId) : undefined,
+        shelf: state.shelves.find(s => s.id === result.item.shelfId),
+        storage: state.storageUnits.find(u => u.id === result.item.storageId)
       }));
 
     return [
@@ -1218,12 +1270,16 @@ export default function App() {
       ...boxMatches
     ];
   }, [
-    state.samples,
+    sampleFuse,
+    storageFuse,
+    shelfFuse,
+    rackFuse,
+    drawerFuse,
+    boxFuse,
     state.storageUnits,
     state.shelves,
     state.racks,
     state.drawers,
-    state.boxes,
     searchQuery
   ]);
 
@@ -1315,6 +1371,75 @@ export default function App() {
     setSelectedRackId(result.box.rackId || "");
     setSelectedDrawerId(result.box.drawerId || "");
     setSelectedBoxId(result.box.id);
+  };
+
+  // Handle scan/manual entry: look up a box ID or sample ID and navigate to it
+  const handleScanSubmit = () => {
+    const query = scanInput.trim();
+    if (!query) return;
+
+    // Try box ID first
+    const box = state.boxes.find(b => b.id === query && !b.isArchived);
+    if (box) {
+      setSelectedStorageId(box.storageId);
+      setSelectedShelfId(box.shelfId);
+      setSelectedRackId(box.rackId || "");
+      setSelectedDrawerId(box.drawerId || "");
+      setSelectedBoxId(box.id);
+      setScanInput("");
+      return;
+    }
+
+    // Try sample ID
+    const sample = state.samples.find(s => s.id === query);
+    if (sample) {
+      setSelectedStorageId(sample.storageId);
+      setSelectedShelfId(sample.shelfId);
+      setSelectedRackId(sample.rackId || "");
+      setSelectedDrawerId(sample.drawerId || "");
+      setSelectedBoxId(sample.boxId);
+      setSelectedSampleId(sample.id);
+      setScanInput("");
+      return;
+    }
+
+    // Try CAS number
+    const casSample = state.samples.find(s => s.casNumber === query && !s.isArchived);
+    if (casSample) {
+      setSelectedStorageId(casSample.storageId);
+      setSelectedShelfId(casSample.shelfId);
+      setSelectedRackId(casSample.rackId || "");
+      setSelectedDrawerId(casSample.drawerId || "");
+      setSelectedBoxId(casSample.boxId);
+      setSelectedSampleId(casSample.id);
+      setScanInput("");
+      return;
+    }
+
+    alert(`No box or sample found for "${query}". Try a Box ID, Sample ID, or CAS number.`);
+  };
+
+  // Generate and print QR labels for all boxes
+  const handlePrintQRLables = async () => {
+    setIsGeneratingQR(true);
+    try {
+      const labels = await generateAllBoxQRLabels(
+        state.boxes,
+        state.shelves,
+        state.racks,
+        state.drawers,
+        state.storageUnits
+      );
+      if (labels.length === 0) {
+        alert("No active boxes found to generate QR labels for.");
+        return;
+      }
+      printQRLabels(labels);
+    } catch (err) {
+      alert("Failed to generate QR labels: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsGeneratingQR(false);
+    }
   };
 
   // Inspect sample
@@ -2371,6 +2496,23 @@ export default function App() {
       return;
     }
 
+    // Storage compatibility check: warn if incompatible chemicals are in the same box
+    if (targetSample.storageClass) {
+      const boxSamples = state.samples.filter(s =>
+        s.boxId === selectedBoxId && s.id !== sampleId && !s.isArchived
+      );
+      const incompatible = checkCompatibility(targetSample, boxSamples);
+      if (incompatible.length > 0) {
+        const proceed = confirm(
+          `⚠ Storage Compatibility Warning\n\n` +
+          `"${targetSample.chemicalName}" (${targetSample.storageClass}) may be incompatible with:\n` +
+          incompatible.join("\n") +
+          `\n\nPlace it here anyway?`
+        );
+        if (!proceed) return;
+      }
+    }
+
     // Move sample to selected location
     const boxName = currentBox?.name || "Target Box";
     apiMutate(
@@ -2623,17 +2765,25 @@ export default function App() {
   return (
     <div className="w-full min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans overflow-x-hidden selection:bg-indigo-500 selection:text-white">
       {/* Header */}
-      <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between shrink-0 sticky top-0 z-10 shadow-3xs">
-        <div className="flex items-center gap-4">
+      <header className="h-16 bg-white border-b border-slate-200 px-4 lg:px-6 flex items-center justify-between shrink-0 sticky top-0 z-30 shadow-3xs">
+        <div className="flex items-center gap-2 lg:gap-4 shrink-0">
+          {/* Hamburger — mobile only */}
+          <button
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="lg:hidden p-2 rounded-lg hover:bg-slate-100 text-slate-600"
+            aria-label="Toggle sidebar"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
           <div className="w-9 h-9 bg-indigo-600 rounded flex items-center justify-center text-white font-extrabold text-lg shadow-sm">L</div>
-          <div>
+          <div className="hidden sm:block">
             <h1 className="text-base font-extrabold tracking-tight text-slate-900">Sousa Lab Inventory</h1>
             <p className="text-[10px] text-slate-400 font-medium tracking-wide uppercase">Durable Lab Inventory</p>
           </div>
         </div>
 
         {/* Global Search with dynamic dropdown suggestion */}
-        <div className="flex-1 max-w-xl px-10 relative">
+        <div className="flex-1 max-w-xl px-4 lg:px-10 relative hidden md:block">
           <div className="relative">
             <div className="absolute inset-y-0 left-3.5 flex items-center pointer-events-none text-slate-400">
               <Search className="w-4 h-4" />
@@ -2766,8 +2916,48 @@ export default function App() {
           )}
         </div>
 
+        {/* Scan / QR Input */}
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="relative hidden lg:block">
+            <div className="absolute inset-y-0 left-2.5 flex items-center pointer-events-none text-slate-400">
+              <ScanLine className="w-3.5 h-3.5" />
+            </div>
+            <input
+              type="text"
+              value={scanInput}
+              onChange={e => setScanInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleScanSubmit();
+                }
+              }}
+              placeholder="Scan / enter Box ID, Sample ID, or CAS..."
+              className="w-48 bg-slate-100 border-none rounded-lg py-2 pl-8 pr-3 text-xs focus:ring-2 focus:ring-indigo-500/20 focus:bg-white transition-all text-slate-800 outline-hidden font-medium placeholder-slate-400"
+            />
+          </div>
+          <button
+            onClick={handlePrintQRLables}
+            disabled={isGeneratingQR}
+            className="px-3 py-2 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200/50 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+            title="Generate printable QR code labels for all boxes"
+          >
+            <QrCode className="w-3.5 h-3.5" />
+            {isGeneratingQR ? "Generating..." : "QR Labels"}
+          </button>
+        </div>
+
         {/* Action Buttons */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Inspector toggle — mobile/tablet only */}
+          <button
+            onClick={() => setInspectorOpen(!inspectorOpen)}
+            className="xl:hidden p-2 rounded-lg hover:bg-slate-100 text-slate-600"
+            aria-label="Toggle inspector"
+            title="Toggle sample inspector"
+          >
+            {inspectorOpen ? <PanelRightClose className="h-5 w-5" /> : <PanelRightOpen className="h-5 w-5" />}
+          </button>
           {/* Active User Label */}
           <div className="flex items-center gap-1 px-3 py-1.5 bg-indigo-50 border border-indigo-100/50 rounded-lg text-indigo-700 text-xs font-semibold mr-1">
             <User className="h-3.5 w-3.5" />
@@ -2847,10 +3037,23 @@ export default function App() {
       </header>
 
       {/* Main Body */}
-      <main className="flex-1 flex overflow-hidden min-h-[calc(100vh-6rem)]">
-        
+      <main className="flex-1 flex overflow-hidden min-h-[calc(100vh-6rem)] relative">
+
+        {/* Mobile sidebar backdrop */}
+        {sidebarOpen && (
+          <div
+            className="lg:hidden fixed inset-0 bg-black/40 z-20"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+
         {/* Left Sidebar: Navigating refrigerators & shelfs */}
-        <aside className="w-64 bg-white border-r border-slate-200 flex flex-col shrink-0">
+        <aside className={`
+          w-64 bg-white border-r border-slate-200 flex flex-col shrink-0
+          fixed lg:static inset-y-0 left-0 z-20 lg:z-auto
+          transition-transform duration-200
+          ${sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
+        `}>
           
           {/* Storage Units Selectors */}
           <div className="p-4 border-b border-slate-100 flex-1 overflow-y-auto space-y-4">
@@ -3796,13 +3999,29 @@ export default function App() {
                                     handleOpenNewSampleAtGridCell(rowNum, colNum);
                                   }}
                                   className={`relative w-11 h-11 border rounded flex flex-col items-center justify-center cursor-pointer transition-all ${bgClass}`}
-                                  title={slotSample ? `${slotSample.chemicalName} (Qty: ${slotSample.qty} ${slotSample.units})` : `Empty slot Row ${rowNum}, Col ${colNum}`}
+                                  title={slotSample ? `${slotSample.chemicalName} (Qty: ${slotSample.qty} ${slotSample.units})${slotSample.expiresOn ? ` | Expires: ${slotSample.expiresOn}` : ""}${isLowStock(slotSample) ? " | LOW STOCK" : ""}` : `Empty slot Row ${rowNum}, Col ${colNum}`}
                                 >
                                   {isSelected && (
                                     <span className="absolute top-0.5 right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-white/95 px-1 text-[8px] font-extrabold text-indigo-700 shadow-sm border border-indigo-200">
                                       {selectedGridSampleIds.length > 1 && selectionIndex >= 0 ? selectionIndex + 1 : <Check className="h-2.5 w-2.5" />}
                                     </span>
                                   )}
+                                  {/* Expiry / low-stock indicator dots */}
+                                  {slotSample && !isSelected && (() => {
+                    const expiryStatus = getExpiryStatus(slotSample);
+                    const lowStock = isLowStock(slotSample);
+                    if (expiryStatus === "none" && !lowStock) return null;
+                    return (
+                      <span className="absolute top-0.5 left-0.5 flex gap-0.5">
+                        {expiryStatus !== "none" && (
+                          <span className={`w-2 h-2 rounded-full ${getExpiryColorClass(expiryStatus)}`} title={`Expiry: ${getExpiryLabel(expiryStatus)}`} />
+                        )}
+                        {lowStock && (
+                          <span className="w-2 h-2 rounded-full bg-orange-500" title="Low stock" />
+                        )}
+                      </span>
+                    );
+                  })()}
                                   <span className="text-[9px] block opacity-60">
                                     {String.fromCharCode(64 + rowNum)}{colNum}
                                   </span>
@@ -3835,6 +4054,14 @@ export default function App() {
                         <div className="flex items-center gap-2">
                           <span className="w-3.5 h-3.5 bg-indigo-600 rounded"></span> 
                           <span className="font-medium">Selected Item</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                          <span className="font-medium">Expired / Expiring Soon</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-orange-500"></span>
+                          <span className="font-medium">Low Stock</span>
                         </div>
                         <p className="text-[11px] text-indigo-700 italic ml-auto self-center flex items-center gap-1">
                           <HelpCircle className="h-3 w-3" /> Drag-and-drop a grid sample onto any empty slot to relocate!
@@ -4407,6 +4634,38 @@ export default function App() {
                               <option value="all">Show All Samples on Shelf</option>
                               <option value="loose">Show Loose Samples Only</option>
                             </select>
+                            <div className="flex gap-1">
+                              <button
+                                onClick={() => setExpiryFilter(expiryFilter === "expired" ? "none" : "expired")}
+                                className={`text-[10px] font-bold px-2 py-1.5 rounded-lg border transition-colors cursor-pointer ${
+                                  expiryFilter === "expired"
+                                    ? "bg-red-100 text-red-700 border-red-300"
+                                    : "bg-white text-slate-500 border-slate-200 hover:border-red-200 hover:text-red-600"
+                                }`}
+                              >
+                                Expired
+                              </button>
+                              <button
+                                onClick={() => setExpiryFilter(expiryFilter === "expiring" ? "none" : "expiring")}
+                                className={`text-[10px] font-bold px-2 py-1.5 rounded-lg border transition-colors cursor-pointer ${
+                                  expiryFilter === "expiring"
+                                    ? "bg-amber-100 text-amber-700 border-amber-300"
+                                    : "bg-white text-slate-500 border-slate-200 hover:border-amber-200 hover:text-amber-600"
+                                }`}
+                              >
+                                Expiring Soon
+                              </button>
+                              <button
+                                onClick={() => setExpiryFilter(expiryFilter === "lowstock" ? "none" : "lowstock")}
+                                className={`text-[10px] font-bold px-2 py-1.5 rounded-lg border transition-colors cursor-pointer ${
+                                  expiryFilter === "lowstock"
+                                    ? "bg-orange-100 text-orange-700 border-orange-300"
+                                    : "bg-white text-slate-500 border-slate-200 hover:border-orange-200 hover:text-orange-600"
+                                }`}
+                              >
+                                Low Stock
+                              </button>
+                            </div>
                           </div>
                         </div>
 
@@ -4450,6 +4709,17 @@ export default function App() {
                                     {sortField === "qty" && (sortDirection === "asc" ? "▲" : "▼")}
                                   </div>
                                 </th>
+                                <th
+                                  onClick={() => handleSort("expiresOn")}
+                                  className="py-3 px-4 cursor-pointer hover:bg-slate-100 hover:text-slate-700 transition-colors border-b border-slate-100"
+                                >
+                                  <div className="flex items-center gap-1">
+                                    <span>Expires</span>
+                                    {sortField === "expiresOn" && (sortDirection === "asc" ? "▲" : "▼")}
+                                  </div>
+                                </th>
+                                <th className="py-3 px-4 border-b border-slate-100">Stock</th>
+                                <th className="py-3 px-4 border-b border-slate-100">Hazard</th>
                                 <th className="py-3 px-4 border-b border-slate-100">Concentration</th>
                                 <th className="py-3 px-4 border-b border-slate-100">Volume / Mass</th>
                                 <th 
@@ -4467,7 +4737,7 @@ export default function App() {
                             <tbody className="divide-y divide-slate-100 text-xs text-slate-600">
                               {sortedShelfSamples.length === 0 ? (
                                 <tr>
-                                  <td colSpan={8} className="text-center py-10 text-slate-400 italic">
+                                  <td colSpan={11} className="text-center py-10 text-slate-400 italic">
                                     No samples matching filters on this shelf.
                                   </td>
                                 </tr>
@@ -4489,6 +4759,34 @@ export default function App() {
                                         </span>
                                       </td>
                                       <td className="py-3 px-4 font-mono">{sample.qty} {sample.units}</td>
+                                      <td className="py-3 px-4 text-[11px]">
+                                        {sample.expiresOn ? (() => {
+                                          const status = getExpiryStatus(sample);
+                                          return (
+                                            <span className={`px-1.5 py-0.5 rounded-full border text-[10px] font-bold ${getExpiryBadgeClass(status)}`}>
+                                              {new Date(sample.expiresOn).toLocaleDateString()}
+                                            </span>
+                                          );
+                                        })() : "—"}
+                                      </td>
+                                      <td className="py-3 px-4 text-[11px]">
+                                        {isLowStock(sample) ? (
+                                          <span className="px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 border border-orange-200 text-[10px] font-bold">
+                                            Low ({sample.qty}/{sample.minStockLevel})
+                                          </span>
+                                        ) : "—"}
+                                      </td>
+                                      <td className="py-3 px-4 text-[11px]">
+                                        {sample.ghsHazardCodes && sample.ghsHazardCodes.length > 0 ? (
+                                          <span className="px-1.5 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200 text-[10px] font-bold" title={sample.ghsHazardCodes.join(", ")}>
+                                            {sample.ghsHazardCodes.length} GHS
+                                          </span>
+                                        ) : sample.storageClass ? (
+                                          <span className="px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 text-[10px] font-bold capitalize">
+                                            {sample.storageClass}
+                                          </span>
+                                        ) : "—"}
+                                      </td>
                                       <td className="py-3 px-4 font-mono text-[11px]">{sample.concentration || "-"}</td>
                                       <td className="py-3 px-4 font-mono text-[11px]">{sample.volumeMass || "-"}</td>
                                       <td className="py-3 px-4 text-slate-500 font-medium text-[11px]">
@@ -5516,6 +5814,20 @@ export default function App() {
                 ) : (
                   /* 6. Root/Lab Level - Shows all active Storage Units */
                   <div className="space-y-4 flex-1 flex flex-col">
+                    <DashboardPanels
+                      samples={state.samples}
+                      onSelectSample={(sampleId) => {
+                        const s = state.samples.find(s => s.id === sampleId);
+                        if (s) {
+                          setSelectedStorageId(s.storageId);
+                          setSelectedShelfId(s.shelfId);
+                          setSelectedRackId(s.rackId || "");
+                          setSelectedDrawerId(s.drawerId || "");
+                          setSelectedBoxId(s.boxId);
+                          setSelectedSampleId(s.id);
+                        }
+                      }}
+                    />
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">
                         Storage Units ({sortedActiveStorageUnits.length})
@@ -5604,252 +5916,57 @@ export default function App() {
         </section>
 
         {/* Right Sidebar: Detail Inspector & Chronological Audit Trail */}
-        <aside className="w-80 bg-white border-l border-slate-200 flex flex-col shrink-0">
-          
-          {/* Sample Inspector Panel */}
-          <div className="p-5 border-b border-slate-100 bg-slate-50/30">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="font-bold text-slate-900 text-sm">Sample Inspector</h2>
-              {inspectedSample && (
-                <button
-                  onClick={() => {
-                    setEditingSample(inspectedSample);
-                    setSampleModalOpen(true);
-                  }}
-                  className="text-indigo-600 hover:text-indigo-800 text-xs font-bold flex items-center gap-1 cursor-pointer"
-                >
-                  <Edit2 className="h-3 w-3" /> Edit Info
-                </button>
-              )}
-            </div>
-
-            {inspectedSample ? (
-              <div className="space-y-4">
-                <div>
-                  <label className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Chemical / Sample Name</label>
-                  <p className="text-xs font-bold text-slate-800">{inspectedSample.chemicalName}</p>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3.5">
-                  <div>
-                    <label className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Quantity</label>
-                    <p className="text-xs font-semibold text-slate-800">
-                      {inspectedSample.qty} <span className="text-slate-400 font-normal">{inspectedSample.units}</span>
-                    </p>
-                  </div>
-                  <div>
-                    <label className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Item Type</label>
-                    <p className="text-xs font-semibold text-slate-800">{inspectedSample.itemType || "—"}</p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3.5">
-                  <div>
-                    <label className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">CAS Number</label>
-                    <p className="text-xs font-mono text-slate-700">{inspectedSample.casNumber || "—"}</p>
-                  </div>
-                  <div>
-                    <label className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Location Placement</label>
-                    <p className="text-xs font-semibold text-indigo-600 bg-indigo-50/50 px-1.5 py-0.5 rounded border border-indigo-100/30 w-fit leading-normal">
-                      {getSampleLocationString(inspectedSample)}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3.5">
-                  <div>
-                    <label className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Concentration</label>
-                    <p className="text-xs font-mono text-slate-700">{inspectedSample.concentration || "—"}</p>
-                  </div>
-                  <div>
-                    <label className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Volume / Mass</label>
-                    <p className="text-xs font-mono text-slate-700">{inspectedSample.volumeMass || "—"}</p>
-                  </div>
-                </div>
-
-                {inspectedSample.plasmidName && (
-                  <div>
-                    <label className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Plasmid Details</label>
-                    <div className="p-2 bg-slate-50 rounded border border-slate-100 text-[11px] space-y-0.5 text-slate-600">
-                      <div><span className="font-semibold text-slate-800">Plasmid:</span> {inspectedSample.plasmidName}</div>
-                      {inspectedSample.organism && <div><span className="font-semibold text-slate-800">Organism:</span> {inspectedSample.organism}</div>}
-                      {inspectedSample.vector && <div><span className="font-semibold text-slate-800">Vector:</span> {inspectedSample.vector}</div>}
-                      {inspectedSample.gene && <div><span className="font-semibold text-slate-800">Gene:</span> {inspectedSample.gene}</div>}
-                    </div>
-                  </div>
-                )}
-
-                {inspectedSample.notes && (
-                  <div>
-                    <label className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Storage & Prep Notes</label>
-                    <p className="text-xs text-slate-600 leading-relaxed bg-slate-50 p-2 rounded border border-slate-100 font-serif italic">
-                      "{inspectedSample.notes}"
-                    </p>
-                  </div>
-                )}
-
-                {/* Micro Actions */}
-                <div className="pt-2 grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => handleDepleteSample(inspectedSample.id, inspectedSample.chemicalName)}
-                    disabled={inspectedSample.qty === 0}
-                    className="py-1.5 bg-orange-50 hover:bg-orange-100 disabled:opacity-50 text-orange-700 text-xs font-bold rounded-lg border border-orange-200 transition-colors flex items-center justify-center gap-1 cursor-pointer"
-                  >
-                    Mark Depleted
-                  </button>
-                  <button
-                    onClick={() => handleArchiveSample(inspectedSample.id, inspectedSample.chemicalName)}
-                    className="py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-lg border border-red-200 transition-colors flex items-center justify-center gap-1 cursor-pointer"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                    Archive/Delete
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="text-center py-10 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
-                <p className="text-xs text-slate-400">Click a sample to inspect all spreadsheet metadata, notes, and catalog references.</p>
-              </div>
-            )}
-          </div>
-
-          {/* Chronological Audit Logs */}
-          <div className="flex-1 flex flex-col min-h-0">
-            <div className="px-5 py-3 border-b border-slate-50 bg-slate-50/50 flex items-center justify-between shrink-0">
-              <h3 className="text-[10px] uppercase font-bold text-slate-400 tracking-widest flex items-center gap-1">
-                <History className="h-3.5 w-3.5 text-slate-400" /> Recent Audit Trail
-              </h3>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={handleUndoLastChange}
-                  className="text-[9px] bg-orange-100 hover:bg-orange-200 text-orange-700 font-bold px-1.5 py-0.5 rounded-full cursor-pointer"
-                  title="Undo last change"
-                >
-                  Undo Last
-                </button>
-                <button
-                  onClick={() => setShowAuditTrailModal(true)}
-                  className="text-[9px] bg-slate-200 hover:bg-slate-300 text-slate-600 font-bold px-1.5 py-0.5 rounded-full cursor-pointer"
-                >
-                  Full Trail
-                </button>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-5 space-y-4">
-              {state.auditLogs && state.auditLogs.length > 0 ? (
-                state.auditLogs.slice(0, 50).map((log) => (
-                  <div key={log.id} className="relative pl-4 border-l-2 border-slate-200/80">
-                    <div className="absolute -left-[5px] top-0.5 w-2.5 h-2.5 rounded-full bg-indigo-500 border border-white"></div>
-                    <p className="text-[11px] font-bold text-slate-800">{log.action}</p>
-                    <p className="text-[10px] text-slate-400 mt-0.5 font-medium flex items-center gap-1">
-                      <User className="h-2.5 w-2.5 text-slate-300" /> {log.user} • {new Date(log.timestamp).toLocaleTimeString()}
-                    </p>
-                    <p className="text-[10px] text-slate-500 mt-1 italic leading-relaxed">
-                      {log.description}
-                    </p>
-                  </div>
-                ))
-              ) : (
-                <p className="text-xs text-slate-400 italic text-center py-6">No audit logs logged yet.</p>
-              )}
-            </div>
-          </div>
-        </aside>
+        {/* Mobile backdrop for inspector */}
+        {inspectorOpen && (
+          <div
+            className="xl:hidden fixed inset-0 bg-black/40 z-20"
+            onClick={() => setInspectorOpen(false)}
+          />
+        )}
+        <div className={`
+          shrink-0
+          fixed xl:static inset-y-0 right-0 z-20 xl:z-auto
+          transition-transform duration-200
+          ${inspectorOpen ? "translate-x-0" : "translate-x-full xl:translate-x-0"}
+        `}>
+        <SampleInspector
+          inspectedSample={inspectedSample}
+          allSamples={state.samples}
+          auditLogs={state.auditLogs}
+          locationString={inspectedSample ? getSampleLocationString(inspectedSample) : ""}
+          onEdit={() => inspectedSample && setEditingSample(inspectedSample)}
+          onDeplete={handleDepleteSample}
+          onArchive={handleArchiveSample}
+          onUndoLastChange={handleUndoLastChange}
+          onShowFullTrail={() => setShowAuditTrailModal(true)}
+        />
+        </div>
       </main>
 
-      {showAuditTrailModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-5xl max-h-[90vh] bg-white rounded-xl border border-slate-200 shadow-2xl overflow-hidden flex flex-col">
-            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Full Audit Trail</h3>
-                <p className="text-xs text-slate-500">Review, restore, and export complete change history.</p>
-              </div>
-              <button
-                onClick={() => setShowAuditTrailModal(false)}
-                className="p-1 rounded hover:bg-slate-200 text-slate-500"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="px-5 py-3 border-b border-slate-100 bg-white flex flex-wrap items-center gap-2">
-              <input
-                type="text"
-                value={auditSearch}
-                onChange={(e) => setAuditSearch(e.target.value)}
-                placeholder="Filter by action, description, or user..."
-                className="flex-1 min-w-[220px] px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 outline-hidden"
-              />
-              <button
-                onClick={handleUndoLastChange}
-                className="px-3 py-2 text-xs font-bold bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-lg"
-              >
-                Undo Last Change
-              </button>
-              <button
-                onClick={handleExportAuditTrailCSV}
-                className="px-3 py-2 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg flex items-center gap-1"
-              >
-                <Download className="h-3.5 w-3.5" /> Export CSV
-              </button>
-              <button
-                onClick={handleExportAuditTrailJSON}
-                className="px-3 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center gap-1"
-              >
-                <Download className="h-3.5 w-3.5" /> Export JSON
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-5 space-y-3 bg-slate-50/30">
-              {filteredAuditLogs.length === 0 ? (
-                <p className="text-xs text-slate-500 italic text-center py-8">No audit records match your filter.</p>
-              ) : (
-                filteredAuditLogs.map(log => {
-                  const relatedSnapshot = state.auditSnapshots.find(s => s.logId === log.id);
-                  return (
-                    <div key={log.id} className="bg-white border border-slate-200 rounded-lg p-3.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="text-xs font-bold text-slate-900">{log.action}</p>
-                          <p className="text-[11px] text-slate-500 mt-0.5">
-                            {new Date(log.timestamp).toLocaleString()} • {log.user}
-                          </p>
-                        </div>
-                        {relatedSnapshot ? (
-                          <button
-                            onClick={() => handleRestoreFromSnapshot(relatedSnapshot.id)}
-                            className="px-2.5 py-1.5 text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-md"
-                          >
-                            Restore This Point
-                          </button>
-                        ) : (
-                          <span className="text-[10px] text-slate-400">No snapshot</span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-600 mt-2 leading-relaxed">{log.description}</p>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <AuditTrailModal
+        auditLogs={state.auditLogs}
+        auditSnapshots={state.auditSnapshots}
+        auditSearch={auditSearch}
+        onAuditSearchChange={setAuditSearch}
+        onUndoLastChange={handleUndoLastChange}
+        onExportAuditTrailCSV={handleExportAuditTrailCSV}
+        onExportAuditTrailJSON={handleExportAuditTrailJSON}
+        onRestoreFromSnapshot={handleRestoreFromSnapshot}
+        onClose={() => setShowAuditTrailModal(false)}
+      />
 
       {/* Footer Status */}
       <footer className="h-8 bg-slate-900 text-white flex items-center px-4 text-[10px] uppercase tracking-wider shrink-0 justify-between">
         <div className="flex gap-4 items-center">
           <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> 
-            Database Synced
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span className="hidden sm:inline">Database Synced</span>
           </span>
-          <span className="text-slate-400">OneDrive Shared Lab Folder: /LAB_RESOURCES</span>
+          <span className="text-slate-400 hidden md:inline">OneDrive Shared Lab Folder: /LAB_RESOURCES</span>
         </div>
         <div className="flex gap-4 text-slate-300">
-          <span>Active Samples: {state.samples.filter(s => !s.isArchived).length}</span>
-          <span>Storage Capacity Used: {totalCapacityUsed}%</span>
+          <span>Active: {state.samples.filter(s => !s.isArchived).length}</span>
+          <span className="hidden sm:inline">Capacity: {totalCapacityUsed}%</span>
         </div>
       </footer>
 

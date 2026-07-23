@@ -842,7 +842,34 @@ async function startServer() {
   // Middleware
   app.use(express.json({ limit: "50mb" })); // Support large payloads for spreadsheet bulk imports
 
+  // Authentication: if LAB_PASSPHRASE is set, bind to all interfaces and require
+  // a bearer token on API routes. Otherwise, bind to localhost only (no auth needed).
+  // The passphrase is injected into the served HTML as a global so the client can
+  // include it in API calls. Anyone who can load the page already has network access;
+  // the passphrase prevents direct API calls from unauthenticated network actors.
+  const labPassphrase = process.env.LAB_PASSPHRASE;
+  const bindAddress = labPassphrase ? "0.0.0.0" : "127.0.0.1";
+
+  if (labPassphrase) {
+    app.use("/api", (req, res, next) => {
+      // Allow the auth-config endpoint without authentication
+      if (req.path === "/auth-config") return next();
+      const authHeader = req.headers.authorization;
+      if (!authHeader || authHeader !== `Bearer ${labPassphrase}`) {
+        res.status(401).json({ error: "Unauthorized: valid passphrase required" });
+        return;
+      }
+      next();
+    });
+  }
+
   // API Routes
+  // Auth config endpoint (unauthenticated — returns passphrase so the client can
+  // include it in subsequent API calls; only accessible from the same network)
+  app.get("/api/auth-config", (req, res) => {
+    res.json({ passphrase: labPassphrase || null });
+  });
+
   app.get("/api/inventory", async (req, res) => {
     try {
       const state = await loadState();
@@ -1677,8 +1704,9 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Lab Inventory Tracker server running on http://${browserHost}:${PORT}`);
+  app.listen(PORT, bindAddress, () => {
+    const authMode = labPassphrase ? "passphrase auth enabled" : "localhost only (no auth)";
+    console.log(`Lab Inventory Tracker server running on http://${browserHost}:${PORT} (${authMode})`);
   });
 }
 

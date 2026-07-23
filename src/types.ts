@@ -129,6 +129,13 @@ export interface Sample {
   packaging: string;
   price: string;
   lot: string;
+
+  // Lab safety & inventory management fields (review items 3, 4, 5)
+  ghsHazardCodes?: string[];      // e.g. ["H225", "H319"] — GHS hazard statements
+  sdsUrl?: string;                // URL to Safety Data Sheet
+  storageClass?: string;          // "flammable" | "corrosive" | "oxidizer" | "acid" | "base" | "light-sensitive" | "general"
+  minStockLevel?: number;         // Reorder threshold
+  reorderQty?: number;            // Suggested reorder quantity
 }
 
 export interface AuditLog {
