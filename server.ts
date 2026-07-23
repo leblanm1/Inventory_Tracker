@@ -540,6 +540,255 @@ async function saveState(state: InventoryState): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Granular mutation engine
+// ---------------------------------------------------------------------------
+
+type MutationFn = (state: InventoryState) => InventoryState;
+
+interface MutateResult {
+  version: number;
+  state: InventoryState;
+}
+
+/**
+ * Optional callback that lets the mutation determine the final audit action
+ * and description after seeing the old and new state. Useful when the audit
+ * text depends on whether a record was created vs updated.
+ */
+type AuditResolver = (oldState: InventoryState, newState: InventoryState) => { action: string; description: string };
+
+/**
+ * Centralized read-modify-write with optimistic concurrency control.
+ * All granular API endpoints route through this function.
+ *
+ * 1. Loads current state from disk.
+ * 2. Checks client version against server version (409 if mismatch).
+ * 3. Applies the caller's mutation function.
+ * 4. Increments version, generates audit log + snapshot, saves to disk.
+ * 5. Returns the new version and updated state.
+ */
+async function mutateState(
+  clientVersion: number,
+  user: string,
+  action: string,
+  description: string,
+  mutation: MutationFn,
+  resolveAudit?: AuditResolver
+): Promise<MutateResult> {
+  const existingState = await loadState();
+
+  const serverVersion = existingState.version;
+  if (clientVersion !== serverVersion) {
+    throw { status: 409, serverVersion, clientVersion, serverState: existingState };
+  }
+
+  const mutatedState = mutation(existingState);
+
+  // Allow the mutation to refine the audit text based on what actually happened
+  let finalAction = action;
+  let finalDesc = description;
+  if (resolveAudit) {
+    const resolved = resolveAudit(existingState, mutatedState);
+    finalAction = resolved.action;
+    finalDesc = resolved.description;
+  }
+
+  const now = new Date().toISOString();
+  const newLog: AuditLog = {
+    id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+    timestamp: now,
+    user: user || "Anonymous Lab Member",
+    action: finalAction,
+    description: finalDesc
+  };
+
+  const newSnapshot = {
+    id: `snap-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+    logId: newLog.id,
+    timestamp: now,
+    user: user || "Anonymous Lab Member",
+    action: finalAction,
+    description: finalDesc,
+    users: mutatedState.users,
+    storageUnits: mutatedState.storageUnits,
+    shelves: mutatedState.shelves,
+    racks: mutatedState.racks,
+    drawers: mutatedState.drawers,
+    boxes: mutatedState.boxes,
+    samples: mutatedState.samples
+  };
+
+  const finalState: InventoryState = {
+    ...mutatedState,
+    version: serverVersion + 1,
+    auditLogs: [newLog, ...mutatedState.auditLogs].slice(0, 1000),
+    auditSnapshots: [newSnapshot, ...mutatedState.auditSnapshots].slice(0, 1000)
+  };
+
+  await saveState(finalState);
+  return { version: finalState.version, state: finalState };
+}
+
+/** Helper to extract version and user from request headers. */
+function getRequestContext(req: express.Request): { clientVersion: number; user: string } {
+  const clientVersion = parseInt(String(req.headers["x-client-version"]), 10);
+  const user = String(req.headers["x-user"] || "Anonymous Lab Member");
+  return { clientVersion: isNaN(clientVersion) ? 0 : clientVersion, user };
+}
+
+/** Express error handler for mutateState 409 conflicts. */
+function handleMutateError(err: any, res: express.Response): boolean {
+  if (err && err.status === 409) {
+    res.status(409).json({
+      error: "Version conflict: another user has modified the inventory since you last loaded it.",
+      serverVersion: err.serverVersion,
+      clientVersion: err.clientVersion,
+      serverState: err.serverState
+    });
+    return true;
+  }
+  return false;
+}
+
+// --- Cascade archive helpers ---
+
+function cascadeArchiveStorage(state: InventoryState, id: string): InventoryState {
+  return {
+    ...state,
+    storageUnits: state.storageUnits.map(u => u.id === id ? { ...u, isArchived: true } : u),
+    shelves: state.shelves.map(s => s.storageId === id ? { ...s, isArchived: true } : s),
+    racks: state.racks.map(r => r.storageId === id ? { ...r, isArchived: true } : r),
+    drawers: state.drawers.map(d => d.storageId === id ? { ...d, isArchived: true } : d),
+    boxes: state.boxes.map(b => b.storageId === id ? { ...b, isArchived: true } : b),
+    samples: state.samples.map(s => s.storageId === id ? { ...s, isArchived: true } : s)
+  };
+}
+
+function cascadeArchiveShelf(state: InventoryState, id: string): InventoryState {
+  return {
+    ...state,
+    shelves: state.shelves.map(s => s.id === id ? { ...s, isArchived: true } : s),
+    racks: state.racks.map(r => r.shelfId === id ? { ...r, isArchived: true } : r),
+    drawers: state.drawers.map(d => d.shelfId === id ? { ...d, isArchived: true } : d),
+    boxes: state.boxes.map(b => b.shelfId === id ? { ...b, isArchived: true } : b),
+    samples: state.samples.map(s => s.shelfId === id ? { ...s, isArchived: true } : s)
+  };
+}
+
+function cascadeArchiveRack(state: InventoryState, id: string): InventoryState {
+  return {
+    ...state,
+    racks: state.racks.map(r => r.id === id ? { ...r, isArchived: true } : r),
+    drawers: state.drawers.map(d => d.rackId === id ? { ...d, isArchived: true } : d),
+    boxes: state.boxes.map(b => b.rackId === id ? { ...b, isArchived: true } : b),
+    samples: state.samples.map(s => s.rackId === id ? { ...s, isArchived: true } : s)
+  };
+}
+
+function cascadeArchiveDrawer(state: InventoryState, id: string): InventoryState {
+  return {
+    ...state,
+    drawers: state.drawers.map(d => d.id === id ? { ...d, isArchived: true } : d),
+    boxes: state.boxes.map(b => b.drawerId === id ? { ...b, isArchived: true } : b),
+    samples: state.samples.map(s => s.drawerId === id ? { ...s, isArchived: true } : s)
+  };
+}
+
+function cascadeArchiveBox(state: InventoryState, id: string): InventoryState {
+  return {
+    ...state,
+    boxes: state.boxes.map(b => b.id === id ? { ...b, isArchived: true } : b),
+    samples: state.samples.map(s => s.boxId === id ? { ...s, isArchived: true } : s)
+  };
+}
+
+// --- Cascade restore helpers ---
+
+function cascadeRestoreStorage(state: InventoryState, item: StorageUnit): InventoryState {
+  return {
+    ...state,
+    storageUnits: state.storageUnits.map(u => u.id === item.id ? { ...u, isArchived: false } : u),
+    shelves: state.shelves.map(s => s.storageId === item.id ? { ...s, isArchived: false } : s),
+    racks: state.racks.map(r => r.storageId === item.id ? { ...r, isArchived: false } : r),
+    drawers: state.drawers.map(d => d.storageId === item.id ? { ...d, isArchived: false } : d),
+    boxes: state.boxes.map(b => b.storageId === item.id ? { ...b, isArchived: false } : b),
+    samples: state.samples.map(s => s.storageId === item.id ? { ...s, isArchived: false } : s)
+  };
+}
+
+function cascadeRestoreShelf(state: InventoryState, item: Shelf): InventoryState {
+  let s = {
+    ...state,
+    shelves: state.shelves.map(sh => sh.id === item.id ? { ...sh, isArchived: false } : sh),
+    racks: state.racks.map(r => r.shelfId === item.id ? { ...r, isArchived: false } : r),
+    drawers: state.drawers.map(d => d.shelfId === item.id ? { ...d, isArchived: false } : d),
+    boxes: state.boxes.map(b => b.shelfId === item.id ? { ...b, isArchived: false } : b),
+    samples: state.samples.map(sm => sm.shelfId === item.id ? { ...sm, isArchived: false } : sm)
+  };
+  if (item.storageId) {
+    s = { ...s, storageUnits: s.storageUnits.map(u => u.id === item.storageId ? { ...u, isArchived: false } : u) };
+  }
+  return s;
+}
+
+function cascadeRestoreRack(state: InventoryState, item: Rack): InventoryState {
+  let s = {
+    ...state,
+    racks: state.racks.map(r => r.id === item.id ? { ...r, isArchived: false } : r),
+    drawers: state.drawers.map(d => d.rackId === item.id ? { ...d, isArchived: false } : d),
+    boxes: state.boxes.map(b => b.rackId === item.id ? { ...b, isArchived: false } : b),
+    samples: state.samples.map(sm => sm.rackId === item.id ? { ...sm, isArchived: false } : sm)
+  };
+  if (item.storageId) {
+    s = { ...s, storageUnits: s.storageUnits.map(u => u.id === item.storageId ? { ...u, isArchived: false } : u) };
+  }
+  if (item.shelfId) {
+    s = { ...s, shelves: s.shelves.map(sh => sh.id === item.shelfId ? { ...sh, isArchived: false } : sh) };
+  }
+  return s;
+}
+
+function cascadeRestoreDrawer(state: InventoryState, item: Drawer): InventoryState {
+  let s = {
+    ...state,
+    drawers: state.drawers.map(d => d.id === item.id ? { ...d, isArchived: false } : d),
+    boxes: state.boxes.map(b => b.drawerId === item.id ? { ...b, isArchived: false } : b),
+    samples: state.samples.map(sm => sm.drawerId === item.id ? { ...sm, isArchived: false } : sm)
+  };
+  if (item.storageId) {
+    s = { ...s, storageUnits: s.storageUnits.map(u => u.id === item.storageId ? { ...u, isArchived: false } : u) };
+  }
+  if (item.shelfId) {
+    s = { ...s, shelves: s.shelves.map(sh => sh.id === item.shelfId ? { ...sh, isArchived: false } : sh) };
+  }
+  if (item.rackId) {
+    s = { ...s, racks: s.racks.map(r => r.id === item.rackId ? { ...r, isArchived: false } : r) };
+  }
+  return s;
+}
+
+function cascadeRestoreBox(state: InventoryState, item: Box): InventoryState {
+  let s = {
+    ...state,
+    boxes: state.boxes.map(b => b.id === item.id ? { ...b, isArchived: false } : b),
+    samples: state.samples.map(sm => sm.boxId === item.id ? { ...sm, isArchived: false } : sm)
+  };
+  if (item.storageId) {
+    s = { ...s, storageUnits: s.storageUnits.map(u => u.id === item.storageId ? { ...u, isArchived: false } : u) };
+  }
+  if (item.shelfId) {
+    s = { ...s, shelves: s.shelves.map(sh => sh.id === item.shelfId ? { ...sh, isArchived: false } : sh) };
+  }
+  if (item.rackId) {
+    s = { ...s, racks: s.racks.map(r => r.id === item.rackId ? { ...r, isArchived: false } : r) };
+  }
+  if (item.drawerId) {
+    s = { ...s, drawers: s.drawers.map(d => d.id === item.drawerId ? { ...d, isArchived: false } : d) };
+  }
+  return s;
+}
+
 function canListenOnPort(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const tester = net.createServer();
@@ -654,6 +903,696 @@ async function startServer() {
       res.json({ success: true, message: "Inventory state saved successfully", version: newState.version });
     } catch (err) {
       res.status(500).json({ error: "Failed to save inventory state" });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Granular API endpoints
+  // -------------------------------------------------------------------------
+
+  // PUT /api/samples — create or update samples (upsert by ID)
+  app.put("/api/samples", async (req, res) => {
+    try {
+      const { samples } = req.body as { samples: Sample[] };
+      if (!Array.isArray(samples) || samples.length === 0) {
+        res.status(400).json({ error: "Request body must contain a non-empty 'samples' array" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const isMulti = samples.length > 1;
+
+      const result = await mutateState(
+        clientVersion, user,
+        isMulti ? "Samples Added" : "Sample Added",
+        isMulti
+          ? `Added ${samples.length} sample(s) to storage location.`
+          : `Added new sample "${samples[0].chemicalName}" to storage location.`,
+        (state) => {
+          let updatedSamples = [...state.samples];
+          samples.forEach(sampleItem => {
+            const index = updatedSamples.findIndex(s => s.id === sampleItem.id);
+            if (index >= 0) {
+              updatedSamples[index] = sampleItem;
+            } else {
+              updatedSamples.push(sampleItem);
+            }
+          });
+          return { ...state, samples: updatedSamples };
+        },
+        (oldState, newState) => {
+          // Determine if any of the incoming samples were updates vs new creates
+          const oldIds = new Set(oldState.samples.map(s => s.id));
+          const anyUpdated = samples.some(s => oldIds.has(s.id));
+          const anyNew = samples.some(s => !oldIds.has(s.id));
+          if (anyUpdated && !anyNew) {
+            return {
+              action: isMulti ? "Samples Updated" : "Sample Updated",
+              description: isMulti
+                ? `Updated ${samples.length} sample(s) in storage location.`
+                : `Updated chemical data & coordinates for sample "${samples[0].chemicalName}".`
+            };
+          }
+          if (anyUpdated && anyNew) {
+            return {
+              action: "Samples Added/Updated",
+              description: `Added and updated ${samples.length} sample(s) in storage location.`
+            };
+          }
+          return {
+            action: isMulti ? "Samples Added" : "Sample Added",
+            description: isMulti
+              ? `Added ${samples.length} sample(s) to storage location.`
+              : `Added new sample "${samples[0].chemicalName}" to storage location.`
+          };
+        }
+      );
+
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to save sample(s)" });
+      }
+    }
+  });
+
+  // PATCH /api/samples/bulk — bulk update samples (move, archive, deplete)
+  // NOTE: Must be registered BEFORE /api/samples/:id to avoid Express matching "bulk" as :id
+  app.patch("/api/samples/bulk", async (req, res) => {
+    try {
+      const { ids, changes } = req.body as { ids: string[]; changes: Partial<Sample> };
+      if (!Array.isArray(ids) || ids.length === 0 || !changes) {
+        res.status(400).json({ error: "Request body must contain 'ids' array and 'changes' object" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const isArchive = changes.isArchived === true;
+      const action = isArchive ? "Samples Archived" : "Samples Updated";
+      const desc = isArchive
+        ? `Archived ${ids.length} sample(s).`
+        : `Updated ${ids.length} sample(s).`;
+      const result = await mutateState(clientVersion, user, action, desc, (state) => {
+        const idSet = new Set(ids);
+        return {
+          ...state,
+          samples: state.samples.map(s => idSet.has(s.id) ? { ...s, ...changes } : s)
+        };
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to bulk update samples" });
+      }
+    }
+  });
+
+  // PATCH /api/samples/:id — update a single sample
+  app.patch("/api/samples/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const changes = req.body as Partial<Sample>;
+      if (!changes || typeof changes !== "object") {
+        res.status(400).json({ error: "Request body must be a partial Sample object" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const result = await mutateState(clientVersion, user, "Sample Updated", `Updated sample "${id}".`, (state) => {
+        const exists = state.samples.some(s => s.id === id);
+        if (!exists) throw { status: 404, message: `Sample ${id} not found` };
+        return {
+          ...state,
+          samples: state.samples.map(s => s.id === id ? { ...s, ...changes } : s)
+        };
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (err && err.status === 404) {
+        res.status(404).json({ error: err.message });
+      } else if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to update sample" });
+      }
+    }
+  });
+
+  // PUT /api/storage-units — create or update a storage unit
+  app.put("/api/storage-units", async (req, res) => {
+    try {
+      const { unit } = req.body as { unit: StorageUnit };
+      if (!unit || !unit.id) {
+        res.status(400).json({ error: "Request body must contain a 'unit' object with an 'id'" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const exists = await loadState().then(s => s.storageUnits.some(u => u.id === unit.id));
+      const action = exists ? "Storage Unit Updated" : "Storage Unit Added";
+      const desc = exists
+        ? `Updated storage unit "${unit.name}".`
+        : `Added new storage unit "${unit.name}".`;
+      const result = await mutateState(clientVersion, user, action, desc, (state) => {
+        const idx = state.storageUnits.findIndex(u => u.id === unit.id);
+        let storageUnits;
+        if (idx >= 0) {
+          storageUnits = state.storageUnits.map(u => u.id === unit.id ? unit : u);
+        } else {
+          storageUnits = [...state.storageUnits, unit];
+        }
+        return { ...state, storageUnits };
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to save storage unit" });
+      }
+    }
+  });
+
+  // PATCH /api/storage-units/:id — update/archive a storage unit
+  app.patch("/api/storage-units/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { changes, cascadeArchive } = req.body as { changes: Partial<StorageUnit>; cascadeArchive?: boolean };
+      if (!changes) {
+        res.status(400).json({ error: "Request body must contain 'changes' object" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const isArchive = changes.isArchived === true;
+      const action = isArchive ? "Storage Unit Archived" : "Storage Unit Updated";
+      const unitName = await loadState().then(s => s.storageUnits.find(u => u.id === id)?.name || id);
+      const desc = isArchive
+        ? `Archived storage unit "${unitName}" and all contents.`
+        : `Updated storage unit "${unitName}".`;
+      const result = await mutateState(clientVersion, user, action, desc, (state) => {
+        const exists = state.storageUnits.some(u => u.id === id);
+        if (!exists) throw { status: 404, message: `Storage unit ${id} not found` };
+        if (isArchive && cascadeArchive) {
+          return cascadeArchiveStorage({ ...state, storageUnits: state.storageUnits.map(u => u.id === id ? { ...u, ...changes } : u) }, id);
+        }
+        return {
+          ...state,
+          storageUnits: state.storageUnits.map(u => u.id === id ? { ...u, ...changes } : u)
+        };
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (err && err.status === 404) {
+        res.status(404).json({ error: err.message });
+      } else if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to update storage unit" });
+      }
+    }
+  });
+
+  // PUT /api/shelves — create or update a shelf (optionally with auto-created racks/drawers)
+  app.put("/api/shelves", async (req, res) => {
+    try {
+      const { shelf, autoRacks, autoDrawers } = req.body as { shelf: Shelf; autoRacks?: Rack[]; autoDrawers?: Drawer[] };
+      if (!shelf || !shelf.id) {
+        res.status(400).json({ error: "Request body must contain a 'shelf' object with an 'id'" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const exists = await loadState().then(s => s.shelves.some(sh => sh.id === shelf.id));
+      const action = exists ? "Shelf Updated" : "Shelf Added";
+      const desc = exists
+        ? `Updated shelf "${shelf.name}".`
+        : `Added new shelf "${shelf.name}".`;
+      const result = await mutateState(clientVersion, user, action, desc, (state) => {
+        const idx = state.shelves.findIndex(sh => sh.id === shelf.id);
+        let shelves;
+        if (idx >= 0) {
+          shelves = state.shelves.map(sh => sh.id === shelf.id ? shelf : sh);
+        } else {
+          shelves = [...state.shelves, shelf];
+        }
+        let racks = state.racks;
+        if (autoRacks && autoRacks.length > 0) {
+          const newRackIds = new Set(autoRacks.map(r => r.id));
+          racks = [...autoRacks, ...state.racks.filter(r => !newRackIds.has(r.id))];
+        }
+        let drawers = state.drawers;
+        if (autoDrawers && autoDrawers.length > 0) {
+          const newDrawerIds = new Set(autoDrawers.map(d => d.id));
+          drawers = [...autoDrawers, ...state.drawers.filter(d => !newDrawerIds.has(d.id))];
+        }
+        return { ...state, shelves, racks, drawers };
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to save shelf" });
+      }
+    }
+  });
+
+  // PATCH /api/shelves/:id — update/archive a shelf
+  app.patch("/api/shelves/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { changes, cascadeArchive } = req.body as { changes: Partial<Shelf>; cascadeArchive?: boolean };
+      if (!changes) {
+        res.status(400).json({ error: "Request body must contain 'changes' object" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const isArchive = changes.isArchived === true;
+      const action = isArchive ? "Shelf Archived" : "Shelf Updated";
+      const shelfName = await loadState().then(s => s.shelves.find(sh => sh.id === id)?.name || id);
+      const desc = isArchive
+        ? `Archived shelf "${shelfName}" and all contents.`
+        : `Updated shelf "${shelfName}".`;
+      const result = await mutateState(clientVersion, user, action, desc, (state) => {
+        const exists = state.shelves.some(sh => sh.id === id);
+        if (!exists) throw { status: 404, message: `Shelf ${id} not found` };
+        if (isArchive && cascadeArchive) {
+          return cascadeArchiveShelf({ ...state, shelves: state.shelves.map(sh => sh.id === id ? { ...sh, ...changes } : sh) }, id);
+        }
+        return {
+          ...state,
+          shelves: state.shelves.map(sh => sh.id === id ? { ...sh, ...changes } : sh)
+        };
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (err && err.status === 404) {
+        res.status(404).json({ error: err.message });
+      } else if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to update shelf" });
+      }
+    }
+  });
+
+  // PUT /api/racks — create or update a rack (optionally with auto-created drawers)
+  app.put("/api/racks", async (req, res) => {
+    try {
+      const { rack, autoDrawers } = req.body as { rack: Rack; autoDrawers?: Drawer[] };
+      if (!rack || !rack.id) {
+        res.status(400).json({ error: "Request body must contain a 'rack' object with an 'id'" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const exists = await loadState().then(s => s.racks.some(r => r.id === rack.id));
+      const action = exists ? "Rack Updated" : "Rack Added";
+      const desc = exists
+        ? `Updated rack "${rack.name}".`
+        : `Added new rack "${rack.name}".`;
+      const result = await mutateState(clientVersion, user, action, desc, (state) => {
+        const idx = state.racks.findIndex(r => r.id === rack.id);
+        let racks;
+        if (idx >= 0) {
+          racks = state.racks.map(r => r.id === rack.id ? rack : r);
+        } else {
+          racks = [...state.racks, rack];
+        }
+        let drawers = state.drawers;
+        if (autoDrawers && autoDrawers.length > 0) {
+          const newDrawerIds = new Set(autoDrawers.map(d => d.id));
+          drawers = [...autoDrawers, ...state.drawers.filter(d => !newDrawerIds.has(d.id))];
+        }
+        return { ...state, racks, drawers };
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to save rack" });
+      }
+    }
+  });
+
+  // PATCH /api/racks/:id — update/archive a rack
+  app.patch("/api/racks/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { changes, cascadeArchive } = req.body as { changes: Partial<Rack>; cascadeArchive?: boolean };
+      if (!changes) {
+        res.status(400).json({ error: "Request body must contain 'changes' object" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const isArchive = changes.isArchived === true;
+      const action = isArchive ? "Rack Archived" : "Rack Updated";
+      const rackName = await loadState().then(s => s.racks.find(r => r.id === id)?.name || id);
+      const desc = isArchive
+        ? `Archived rack "${rackName}" and all contents.`
+        : `Updated rack "${rackName}".`;
+      const result = await mutateState(clientVersion, user, action, desc, (state) => {
+        const exists = state.racks.some(r => r.id === id);
+        if (!exists) throw { status: 404, message: `Rack ${id} not found` };
+        if (isArchive && cascadeArchive) {
+          return cascadeArchiveRack({ ...state, racks: state.racks.map(r => r.id === id ? { ...r, ...changes } : r) }, id);
+        }
+        return {
+          ...state,
+          racks: state.racks.map(r => r.id === id ? { ...r, ...changes } : r)
+        };
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (err && err.status === 404) {
+        res.status(404).json({ error: err.message });
+      } else if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to update rack" });
+      }
+    }
+  });
+
+  // PUT /api/drawers — create or update a drawer
+  app.put("/api/drawers", async (req, res) => {
+    try {
+      const { drawer } = req.body as { drawer: Drawer };
+      if (!drawer || !drawer.id) {
+        res.status(400).json({ error: "Request body must contain a 'drawer' object with an 'id'" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const exists = await loadState().then(s => s.drawers.some(d => d.id === drawer.id));
+      const action = exists ? "Drawer Updated" : "Drawer Added";
+      const desc = exists
+        ? `Updated drawer "${drawer.name}".`
+        : `Added new drawer "${drawer.name}".`;
+      const result = await mutateState(clientVersion, user, action, desc, (state) => {
+        const idx = state.drawers.findIndex(d => d.id === drawer.id);
+        let drawers;
+        if (idx >= 0) {
+          drawers = state.drawers.map(d => d.id === drawer.id ? drawer : d);
+        } else {
+          drawers = [...state.drawers, drawer];
+        }
+        return { ...state, drawers };
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to save drawer" });
+      }
+    }
+  });
+
+  // PATCH /api/drawers/:id — update/archive a drawer
+  app.patch("/api/drawers/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { changes, cascadeArchive } = req.body as { changes: Partial<Drawer>; cascadeArchive?: boolean };
+      if (!changes) {
+        res.status(400).json({ error: "Request body must contain 'changes' object" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const isArchive = changes.isArchived === true;
+      const action = isArchive ? "Drawer Archived" : "Drawer Updated";
+      const drawerName = await loadState().then(s => s.drawers.find(d => d.id === id)?.name || id);
+      const desc = isArchive
+        ? `Archived drawer "${drawerName}" and all contents.`
+        : `Updated drawer "${drawerName}".`;
+      const result = await mutateState(clientVersion, user, action, desc, (state) => {
+        const exists = state.drawers.some(d => d.id === id);
+        if (!exists) throw { status: 404, message: `Drawer ${id} not found` };
+        if (isArchive && cascadeArchive) {
+          return cascadeArchiveDrawer({ ...state, drawers: state.drawers.map(d => d.id === id ? { ...d, ...changes } : d) }, id);
+        }
+        return {
+          ...state,
+          drawers: state.drawers.map(d => d.id === id ? { ...d, ...changes } : d)
+        };
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (err && err.status === 404) {
+        res.status(404).json({ error: err.message });
+      } else if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to update drawer" });
+      }
+    }
+  });
+
+  // PUT /api/boxes — create or update a box
+  app.put("/api/boxes", async (req, res) => {
+    try {
+      const { box } = req.body as { box: Box };
+      if (!box || !box.id) {
+        res.status(400).json({ error: "Request body must contain a 'box' object with an 'id'" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const exists = await loadState().then(s => s.boxes.some(b => b.id === box.id));
+      const action = exists ? "Box Updated" : "Box Added";
+      const desc = exists
+        ? `Updated box "${box.name}".`
+        : `Added new box "${box.name}".`;
+      const result = await mutateState(clientVersion, user, action, desc, (state) => {
+        const idx = state.boxes.findIndex(b => b.id === box.id);
+        let boxes;
+        if (idx >= 0) {
+          boxes = state.boxes.map(b => b.id === box.id ? box : b);
+        } else {
+          boxes = [...state.boxes, box];
+        }
+        return { ...state, boxes };
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to save box" });
+      }
+    }
+  });
+
+  // PATCH /api/boxes/:id — update/archive a box
+  app.patch("/api/boxes/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { changes, cascadeArchive } = req.body as { changes: Partial<Box>; cascadeArchive?: boolean };
+      if (!changes) {
+        res.status(400).json({ error: "Request body must contain 'changes' object" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const isArchive = changes.isArchived === true;
+      const action = isArchive ? "Box Archived" : "Box Updated";
+      const boxName = await loadState().then(s => s.boxes.find(b => b.id === id)?.name || id);
+      const desc = isArchive
+        ? `Archived box "${boxName}" and all contents.`
+        : `Updated box "${boxName}".`;
+      const result = await mutateState(clientVersion, user, action, desc, (state) => {
+        const exists = state.boxes.some(b => b.id === id);
+        if (!exists) throw { status: 404, message: `Box ${id} not found` };
+        if (isArchive && cascadeArchive) {
+          return cascadeArchiveBox({ ...state, boxes: state.boxes.map(b => b.id === id ? { ...b, ...changes } : b) }, id);
+        }
+        return {
+          ...state,
+          boxes: state.boxes.map(b => b.id === id ? { ...b, ...changes } : b)
+        };
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (err && err.status === 404) {
+        res.status(404).json({ error: err.message });
+      } else if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to update box" });
+      }
+    }
+  });
+
+  // PATCH /api/bulk-move — bulk relocate any item type
+  app.patch("/api/bulk-move", async (req, res) => {
+    try {
+      const { itemType, ids, destination } = req.body as {
+        itemType: "sample" | "box" | "drawer" | "rack";
+        ids: string[];
+        destination: { storageId?: string; shelfId?: string; rackId?: string; drawerId?: string; boxId?: string; shelfCol?: number | null };
+      };
+      if (!itemType || !Array.isArray(ids) || ids.length === 0 || !destination) {
+        res.status(400).json({ error: "Request body must contain 'itemType', 'ids', and 'destination'" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const action = `${itemType.charAt(0).toUpperCase() + itemType.slice(1)}s Moved`;
+      const desc = `Moved ${ids.length} ${itemType}(s) to new location.`;
+      const result = await mutateState(clientVersion, user, action, desc, (state) => {
+        const idSet = new Set(ids);
+        if (itemType === "sample") {
+          return {
+            ...state,
+            samples: state.samples.map(s => idSet.has(s.id) ? {
+              ...s,
+              storageId: destination.storageId ?? s.storageId,
+              shelfId: destination.shelfId ?? s.shelfId,
+              rackId: destination.rackId ?? s.rackId,
+              drawerId: destination.drawerId ?? s.drawerId,
+              boxId: destination.boxId ?? s.boxId
+            } : s)
+          };
+        } else if (itemType === "box") {
+          return {
+            ...state,
+            boxes: state.boxes.map(b => idSet.has(b.id) ? {
+              ...b,
+              storageId: destination.storageId ?? b.storageId,
+              shelfId: destination.shelfId ?? b.shelfId,
+              rackId: destination.rackId ?? b.rackId,
+              drawerId: destination.drawerId ?? b.drawerId
+            } : b),
+            // Also update samples inside moved boxes
+            samples: state.samples.map(s => s.boxId && idSet.has(s.boxId) ? {
+              ...s,
+              storageId: destination.storageId ?? s.storageId,
+              shelfId: destination.shelfId ?? s.shelfId,
+              rackId: destination.rackId ?? s.rackId,
+              drawerId: destination.drawerId ?? s.drawerId
+            } : s)
+          };
+        } else if (itemType === "drawer") {
+          return {
+            ...state,
+            drawers: state.drawers.map(d => idSet.has(d.id) ? {
+              ...d,
+              storageId: destination.storageId ?? d.storageId,
+              shelfId: destination.shelfId ?? d.shelfId,
+              rackId: destination.rackId ?? d.rackId
+            } : d),
+            boxes: state.boxes.map(b => b.drawerId && idSet.has(b.drawerId) ? {
+              ...b,
+              storageId: destination.storageId ?? b.storageId,
+              shelfId: destination.shelfId ?? b.shelfId,
+              rackId: destination.rackId ?? b.rackId
+            } : b),
+            samples: state.samples.map(s => s.drawerId && idSet.has(s.drawerId) ? {
+              ...s,
+              storageId: destination.storageId ?? s.storageId,
+              shelfId: destination.shelfId ?? s.shelfId,
+              rackId: destination.rackId ?? s.rackId
+            } : s)
+          };
+        } else if (itemType === "rack") {
+          return {
+            ...state,
+            racks: state.racks.map(r => idSet.has(r.id) ? {
+              ...r,
+              storageId: destination.storageId ?? r.storageId,
+              shelfId: destination.shelfId ?? r.shelfId,
+              shelfCol: destination.shelfCol !== undefined ? destination.shelfCol : r.shelfCol
+            } : r),
+            drawers: state.drawers.map(d => d.rackId && idSet.has(d.rackId) ? {
+              ...d,
+              storageId: destination.storageId ?? d.storageId,
+              shelfId: destination.shelfId ?? d.shelfId
+            } : d),
+            boxes: state.boxes.map(b => b.rackId && idSet.has(b.rackId) ? {
+              ...b,
+              storageId: destination.storageId ?? b.storageId,
+              shelfId: destination.shelfId ?? b.shelfId
+            } : b),
+            samples: state.samples.map(s => s.rackId && idSet.has(s.rackId) ? {
+              ...s,
+              storageId: destination.storageId ?? s.storageId,
+              shelfId: destination.shelfId ?? s.shelfId
+            } : s)
+          };
+        }
+        return state;
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to bulk move items" });
+      }
+    }
+  });
+
+  // PATCH /api/restore — restore an archived item (cascading unarchive)
+  app.patch("/api/restore", async (req, res) => {
+    try {
+      const { type, item } = req.body as { type: "sample" | "box" | "drawer" | "rack" | "shelf" | "storage"; item: any };
+      if (!type || !item || !item.id) {
+        res.status(400).json({ error: "Request body must contain 'type' and 'item' with an 'id'" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const name = item.chemicalName || item.name || "item";
+      const action = `${type.charAt(0).toUpperCase() + type.slice(1)} Restored`;
+      const desc = `Restored ${type} "${name}" and its contents.`;
+      const result = await mutateState(clientVersion, user, action, desc, (state) => {
+        if (type === "sample") {
+          return { ...state, samples: state.samples.map(s => s.id === item.id ? { ...s, isArchived: false } : s) };
+        } else if (type === "box") {
+          return cascadeRestoreBox(state, item as Box);
+        } else if (type === "drawer") {
+          return cascadeRestoreDrawer(state, item as Drawer);
+        } else if (type === "rack") {
+          return cascadeRestoreRack(state, item as Rack);
+        } else if (type === "shelf") {
+          return cascadeRestoreShelf(state, item as Shelf);
+        } else if (type === "storage") {
+          return cascadeRestoreStorage(state, item as StorageUnit);
+        }
+        return state;
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to restore item" });
+      }
+    }
+  });
+
+  // PATCH /api/users — update users list
+  app.patch("/api/users", async (req, res) => {
+    try {
+      const { users } = req.body as { users: string[] };
+      if (!Array.isArray(users)) {
+        res.status(400).json({ error: "Request body must contain a 'users' array" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const result = await mutateState(clientVersion, user, "Users Updated", "Updated lab member list.", (state) => {
+        return { ...state, users: sanitizeUsers(users) };
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to update users" });
+      }
+    }
+  });
+
+  // POST /api/bulk-import — bulk CSV import (appends new records)
+  app.post("/api/bulk-import", async (req, res) => {
+    try {
+      const body = req.body as {
+        samples: Sample[];
+        newStorageUnits?: StorageUnit[];
+        newShelves?: Shelf[];
+        newRacks?: Rack[];
+        newDrawers?: Drawer[];
+        newBoxes?: Box[];
+      };
+      if (!body || !Array.isArray(body.samples)) {
+        res.status(400).json({ error: "Request body must contain a 'samples' array" });
+        return;
+      }
+      const { clientVersion, user } = getRequestContext(req);
+      const result = await mutateState(clientVersion, user, "Bulk Import", `Imported ${body.samples.length} sample(s) via CSV.`, (state) => {
+        // Append new storage hierarchy items (dedup by ID)
+        const mergeArrays = <T extends { id: string }>(existing: T[], incoming?: T[]): T[] => {
+          if (!incoming || incoming.length === 0) return existing;
+          const newIds = new Set(incoming.map(i => i.id));
+          return [...incoming, ...existing.filter(e => !newIds.has(e.id))];
+        };
+        return {
+          ...state,
+          storageUnits: mergeArrays(state.storageUnits, body.newStorageUnits),
+          shelves: mergeArrays(state.shelves, body.newShelves),
+          racks: mergeArrays(state.racks, body.newRacks),
+          drawers: mergeArrays(state.drawers, body.newDrawers),
+          boxes: mergeArrays(state.boxes, body.newBoxes),
+          samples: mergeArrays(state.samples, body.samples)
+        };
+      });
+      res.json({ success: true, version: result.version, state: result.state });
+    } catch (err) {
+      if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to bulk import" });
+      }
     }
   });
 

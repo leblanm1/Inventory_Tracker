@@ -291,13 +291,22 @@ export default function App() {
       }
     }
 
-    const updatedSamples = state.samples.map(s => s.id === sampleId ? updatedSample : s);
-    const destName = destType === "box" 
+    const destName = destType === "box"
       ? state.boxes.find(b => b.id === destId)?.name || "box"
       : state.drawers.find(d => d.id === destId)?.name || "drawer";
 
-    saveStateToServer(
-      { ...state, samples: updatedSamples },
+    apiMutate(
+      `/api/samples/${sampleId}`,
+      "PATCH",
+      {
+        drawerId: updatedSample.drawerId,
+        rackId: updatedSample.rackId,
+        shelfId: updatedSample.shelfId,
+        storageId: updatedSample.storageId,
+        boxId: updatedSample.boxId,
+        row: updatedSample.row,
+        col: updatedSample.col
+      },
       "Sample Relocated",
       `Assigned sample "${sample.chemicalName}" to ${destType} "${destName}" via quick assignment.`
     );
@@ -598,6 +607,98 @@ export default function App() {
     }
   };
 
+  /**
+   * Granular API mutation helper. Sends only the changed records to a specific
+   * endpoint, along with the client's current version and user via headers.
+   * The server applies the mutation, increments the version, generates the
+   * audit log + snapshot, and returns the new version + full state.
+   *
+   * On 409 (version conflict), re-fetches the full state and retries once.
+   */
+  const apiMutate = async (
+    endpoint: string,
+    method: "PUT" | "PATCH" | "POST",
+    body: object,
+    _action: string,
+    _description: string
+  ): Promise<InventoryState | null> => {
+    try {
+      setSyncing(true);
+
+      const attempt = async (version: number): Promise<InventoryState | null> => {
+        const res = await fetch(endpoint, {
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Client-Version": String(version),
+            "X-User": currentUser
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const newVersion = typeof data.version === "number" ? data.version : version + 1;
+          const newState: InventoryState = data.state
+            ? { ...data.state, version: newVersion }
+            : { ...state, version: newVersion };
+          setState(newState);
+          return newState;
+        }
+
+        if (res.status === 409) {
+          // Version conflict — re-fetch full state and retry once.
+          const conflictData = await res.json().catch(() => null);
+          const serverVersion = typeof conflictData?.serverVersion === "number"
+            ? conflictData.serverVersion
+            : version;
+
+          const freshRes = await fetch("/api/inventory");
+          if (!freshRes.ok) {
+            console.error("Version conflict and failed to re-fetch server state.");
+            return null;
+          }
+          const freshData = await freshRes.json();
+          const freshState: InventoryState = {
+            version: typeof freshData.version === "number" ? freshData.version : serverVersion,
+            users: Array.isArray(freshData.users) && freshData.users.length > 0
+              ? freshData.users.filter((u: unknown) => typeof u === "string" && u.trim().length > 0)
+              : DEFAULT_USERS,
+            storageUnits: freshData.storageUnits || [],
+            shelves: freshData.shelves || [],
+            racks: freshData.racks || [],
+            drawers: freshData.drawers || [],
+            boxes: freshData.boxes || [],
+            samples: freshData.samples || [],
+            auditLogs: freshData.auditLogs || [],
+            auditSnapshots: freshData.auditSnapshots || []
+          };
+          setState(freshState);
+
+          const retryResult = await attempt(freshState.version);
+          if (!retryResult) {
+            alert(
+              "Another lab member modified the inventory while you were editing. " +
+              "Your change could not be saved automatically. Please review the updated " +
+              "inventory and try your action again."
+            );
+          }
+          return retryResult;
+        }
+
+        console.error("Granular API request failed:", res.status, await res.text().catch(() => ""));
+        return null;
+      };
+
+      return await attempt(state.version);
+    } catch (err) {
+      console.error("Failed to sync granular change to server:", err);
+      return null;
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const handleManageUsers = () => {
     const existing = state.users.join(", ");
     const input = window.prompt(
@@ -622,8 +723,10 @@ export default function App() {
     const nextCurrentUser = uniqueUsers.includes(currentUser) ? currentUser : uniqueUsers[0];
     setCurrentUser(nextCurrentUser);
 
-    saveStateToServer(
-      { ...state, users: uniqueUsers },
+    apiMutate(
+      "/api/users",
+      "PATCH",
+      { users: uniqueUsers },
       "Users Updated",
       `Updated users list to ${uniqueUsers.length} member(s).`
     );
@@ -1250,14 +1353,11 @@ export default function App() {
   // Non-destructive triggers: Archiving items
   const handleArchiveSample = (id: string, name: string) => {
     if (window.confirm(`Are you sure you want to delete/archive sample "${name}"? This action is non-destructive and can be undone.`)) {
-      const updatedSamples = state.samples.map(s => {
-        if (s.id === id) return { ...s, isArchived: true };
-        return s;
-      });
-      const updatedState = { ...state, samples: updatedSamples };
-      saveStateToServer(
-        updatedState, 
-        "Sample Archived", 
+      apiMutate(
+        `/api/samples/${id}`,
+        "PATCH",
+        { isArchived: true },
+        "Sample Archived",
         `Archived/deleted sample "${name}" from its location.`
       );
       if (selectedSampleId === id) setSelectedSampleId(null);
@@ -1273,12 +1373,10 @@ export default function App() {
     const confirmed = window.confirm(`Archive ${selectedCount} selected sample(s) from this box? This action is non-destructive and can be undone.`);
     if (!confirmed) return;
 
-    const updatedSamples = state.samples.map(sample =>
-      selectedGridSampleIds.includes(sample.id) ? { ...sample, isArchived: true } : sample
-    );
-
-    saveStateToServer(
-      { ...state, samples: updatedSamples },
+    apiMutate(
+      "/api/samples/bulk",
+      "PATCH",
+      { ids: [...selectedGridSampleIds], changes: { isArchived: true } },
       "Samples Bulk Archived",
       `Archived ${selectedCount} selected sample(s) from the current box.`
     );
@@ -1300,26 +1398,22 @@ export default function App() {
   };
 
   const handleDepleteSample = (id: string, name: string) => {
-    const updatedSamples = state.samples.map(s => {
-      if (s.id === id) return { ...s, qty: 0 };
-      return s;
-    });
-    const updatedState = { ...state, samples: updatedSamples };
-    saveStateToServer(
-      updatedState, 
-      "Sample Depleted", 
+    apiMutate(
+      `/api/samples/${id}`,
+      "PATCH",
+      { qty: 0 },
+      "Sample Depleted",
       `Marked sample "${name}" as depleted (0 qty).`
     );
   };
 
   const handleArchiveBox = (id: string, name: string) => {
     if (window.confirm(`Archive box "${name}"? All samples currently within this box will also be archived. This can be fully restored.`)) {
-      const updatedBoxes = state.boxes.map(b => b.id === id ? { ...b, isArchived: true } : b);
-      const updatedSamples = state.samples.map(s => s.boxId === id ? { ...s, isArchived: true } : s);
-      const updatedState = { ...state, boxes: updatedBoxes, samples: updatedSamples };
-      saveStateToServer(
-        updatedState, 
-        "Box Archived", 
+      apiMutate(
+        `/api/boxes/${id}`,
+        "PATCH",
+        { changes: { isArchived: true }, cascadeArchive: true },
+        "Box Archived",
         `Archived box "${name}" along with its contained samples.`
       );
       setSelectedBoxId(null);
@@ -1328,15 +1422,11 @@ export default function App() {
 
   const handleArchiveShelf = (id: string, name: string) => {
     if (window.confirm(`Archive shelf "${name}"? This archives all racks, drawers, boxes, and samples on this shelf level.`)) {
-      const updatedShelves = state.shelves.map(s => s.id === id ? { ...s, isArchived: true } : s);
-      const updatedRacks = state.racks.map(r => r.shelfId === id ? { ...r, isArchived: true } : r);
-      const updatedDrawers = state.drawers.map(d => d.shelfId === id ? { ...d, isArchived: true } : d);
-      const updatedBoxes = state.boxes.map(b => b.shelfId === id ? { ...b, isArchived: true } : b);
-      const updatedSamples = state.samples.map(s => s.shelfId === id ? { ...s, isArchived: true } : s);
-      const updatedState = { ...state, shelves: updatedShelves, racks: updatedRacks, drawers: updatedDrawers, boxes: updatedBoxes, samples: updatedSamples };
-      saveStateToServer(
-        updatedState, 
-        "Shelf Archived", 
+      apiMutate(
+        `/api/shelves/${id}`,
+        "PATCH",
+        { changes: { isArchived: true }, cascadeArchive: true },
+        "Shelf Archived",
         `Archived shelf "${name}" and all sub-containers.`
       );
       setSelectedShelfId("");
@@ -1348,14 +1438,11 @@ export default function App() {
 
   const handleArchiveRack = (id: string, name: string) => {
     if (window.confirm(`Archive rack "${name}"? All drawers, boxes, and samples within this rack will also be archived. This is non-destructive and can be undone.`)) {
-      const updatedRacks = state.racks.map(r => r.id === id ? { ...r, isArchived: true } : r);
-      const updatedDrawers = state.drawers.map(d => d.rackId === id ? { ...d, isArchived: true } : d);
-      const updatedBoxes = state.boxes.map(b => b.rackId === id ? { ...b, isArchived: true } : b);
-      const updatedSamples = state.samples.map(s => s.rackId === id ? { ...s, isArchived: true } : s);
-      const updatedState = { ...state, racks: updatedRacks, drawers: updatedDrawers, boxes: updatedBoxes, samples: updatedSamples };
-      saveStateToServer(
-        updatedState, 
-        "Rack Archived", 
+      apiMutate(
+        `/api/racks/${id}`,
+        "PATCH",
+        { changes: { isArchived: true }, cascadeArchive: true },
+        "Rack Archived",
         `Archived rack "${name}" and all nested sub-containers.`
       );
       setSelectedRackId("");
@@ -1366,13 +1453,11 @@ export default function App() {
 
   const handleArchiveDrawer = (id: string, name: string) => {
     if (window.confirm(`Archive drawer "${name}"? All boxes and samples inside this drawer will also be archived. This is non-destructive and can be undone.`)) {
-      const updatedDrawers = state.drawers.map(d => d.id === id ? { ...d, isArchived: true } : d);
-      const updatedBoxes = state.boxes.map(b => b.drawerId === id ? { ...b, isArchived: true } : b);
-      const updatedSamples = state.samples.map(s => s.drawerId === id ? { ...s, isArchived: true } : s);
-      const updatedState = { ...state, drawers: updatedDrawers, boxes: updatedBoxes, samples: updatedSamples };
-      saveStateToServer(
-        updatedState, 
-        "Drawer Archived", 
+      apiMutate(
+        `/api/drawers/${id}`,
+        "PATCH",
+        { changes: { isArchived: true }, cascadeArchive: true },
+        "Drawer Archived",
         `Archived drawer "${name}" and all nested containers.`
       );
       setSelectedDrawerId("");
@@ -1382,25 +1467,11 @@ export default function App() {
 
   const handleArchiveStorage = (id: string, name: string) => {
     if (window.confirm(`Archive storage unit "${name}"? This archives everything inside.`)) {
-      const updatedStorage = state.storageUnits.map(u => u.id === id ? { ...u, isArchived: true } : u);
-      const updatedShelves = state.shelves.map(s => s.storageId === id ? { ...s, isArchived: true } : s);
-      const updatedRacks = state.racks.map(r => r.storageId === id ? { ...r, isArchived: true } : r);
-      const updatedDrawers = state.drawers.map(d => d.storageId === id ? { ...d, isArchived: true } : d);
-      const updatedBoxes = state.boxes.map(b => b.storageId === id ? { ...b, isArchived: true } : b);
-      const updatedSamples = state.samples.map(s => s.storageId === id ? { ...s, isArchived: true } : s);
-      
-      const updatedState = { 
-        ...state, 
-        storageUnits: updatedStorage, 
-        shelves: updatedShelves, 
-        racks: updatedRacks,
-        drawers: updatedDrawers,
-        boxes: updatedBoxes, 
-        samples: updatedSamples 
-      };
-      saveStateToServer(
-        updatedState, 
-        "Storage Unit Archived", 
+      apiMutate(
+        `/api/storage-units/${id}`,
+        "PATCH",
+        { changes: { isArchived: true }, cascadeArchive: true },
+        "Storage Unit Archived",
         `Archived storage unit "${name}" and all nested items.`
       );
       
@@ -1415,89 +1486,14 @@ export default function App() {
 
   // Restore operations from Trash Manager
   const handleRestoreItem = (type: "sample" | "box" | "drawer" | "rack" | "shelf" | "storage", item: any) => {
-    let updatedState = { ...state };
-    let desc = "";
-
-    if (type === "sample") {
-      updatedState.samples = state.samples.map(s => s.id === item.id ? { ...s, isArchived: false } : s);
-      if (item.storageId) {
-        updatedState.storageUnits = state.storageUnits.map(u => u.id === item.storageId ? { ...u, isArchived: false } : u);
-      }
-      if (item.shelfId) {
-        updatedState.shelves = state.shelves.map(s => s.id === item.shelfId ? { ...s, isArchived: false } : s);
-      }
-      if (item.rackId) {
-        updatedState.racks = state.racks.map(r => r.id === item.rackId ? { ...r, isArchived: false } : r);
-      }
-      if (item.drawerId) {
-        updatedState.drawers = state.drawers.map(d => d.id === item.drawerId ? { ...d, isArchived: false } : d);
-      }
-      if (item.boxId) {
-        updatedState.boxes = state.boxes.map(b => b.id === item.boxId ? { ...b, isArchived: false } : b);
-      }
-      desc = `Restored sample "${item.chemicalName}" to storage.`;
-    } else if (type === "box") {
-      // Restore parent chain + box + nested samples
-      updatedState.boxes = state.boxes.map(b => b.id === item.id ? { ...b, isArchived: false } : b);
-      updatedState.samples = state.samples.map(s => s.boxId === item.id ? { ...s, isArchived: false } : s);
-      if (item.storageId) {
-        updatedState.storageUnits = state.storageUnits.map(u => u.id === item.storageId ? { ...u, isArchived: false } : u);
-      }
-      if (item.shelfId) {
-        updatedState.shelves = state.shelves.map(s => s.id === item.shelfId ? { ...s, isArchived: false } : s);
-      }
-      if (item.rackId) {
-        updatedState.racks = state.racks.map(r => r.id === item.rackId ? { ...r, isArchived: false } : r);
-      }
-      if (item.drawerId) {
-        updatedState.drawers = state.drawers.map(d => d.id === item.drawerId ? { ...d, isArchived: false } : d);
-      }
-      desc = `Restored container box "${item.name}" and its samples.`;
-    } else if (type === "drawer") {
-      updatedState.drawers = state.drawers.map(d => d.id === item.id ? { ...d, isArchived: false } : d);
-      updatedState.boxes = state.boxes.map(b => b.drawerId === item.id ? { ...b, isArchived: false } : b);
-      updatedState.samples = state.samples.map(s => s.drawerId === item.id ? { ...s, isArchived: false } : s);
-      if (item.storageId) {
-        updatedState.storageUnits = state.storageUnits.map(u => u.id === item.storageId ? { ...u, isArchived: false } : u);
-      }
-      if (item.shelfId) {
-        updatedState.shelves = state.shelves.map(s => s.id === item.shelfId ? { ...s, isArchived: false } : s);
-      }
-      if (item.rackId) {
-        updatedState.racks = state.racks.map(r => r.id === item.rackId ? { ...r, isArchived: false } : r);
-      }
-      desc = `Restored drawer "${item.name}" and nested contents.`;
-    } else if (type === "rack") {
-      updatedState.racks = state.racks.map(r => r.id === item.id ? { ...r, isArchived: false } : r);
-      updatedState.drawers = state.drawers.map(d => d.rackId === item.id ? { ...d, isArchived: false } : d);
-      updatedState.boxes = state.boxes.map(b => b.rackId === item.id ? { ...b, isArchived: false } : b);
-      updatedState.samples = state.samples.map(s => s.rackId === item.id ? { ...s, isArchived: false } : s);
-      if (item.storageId) {
-        updatedState.storageUnits = state.storageUnits.map(u => u.id === item.storageId ? { ...u, isArchived: false } : u);
-      }
-      if (item.shelfId) {
-        updatedState.shelves = state.shelves.map(s => s.id === item.shelfId ? { ...s, isArchived: false } : s);
-      }
-      desc = `Restored rack "${item.name}" and nested contents.`;
-    } else if (type === "shelf") {
-      updatedState.shelves = state.shelves.map(s => s.id === item.id ? { ...s, isArchived: false } : s);
-      updatedState.racks = state.racks.map(r => r.shelfId === item.id ? { ...r, isArchived: false } : r);
-      updatedState.drawers = state.drawers.map(d => d.shelfId === item.id ? { ...d, isArchived: false } : d);
-      updatedState.boxes = state.boxes.map(b => b.shelfId === item.id ? { ...b, isArchived: false } : b);
-      updatedState.samples = state.samples.map(s => s.shelfId === item.id ? { ...s, isArchived: false } : s);
-      updatedState.storageUnits = state.storageUnits.map(u => u.id === item.storageId ? { ...u, isArchived: false } : u);
-      desc = `Restored shelf "${item.name}".`;
-    } else if (type === "storage") {
-      updatedState.storageUnits = state.storageUnits.map(u => u.id === item.id ? { ...u, isArchived: false } : u);
-      updatedState.shelves = state.shelves.map(s => s.storageId === item.id ? { ...s, isArchived: false } : s);
-      updatedState.racks = state.racks.map(r => r.storageId === item.id ? { ...r, isArchived: false } : r);
-      updatedState.drawers = state.drawers.map(d => d.storageId === item.id ? { ...d, isArchived: false } : d);
-      updatedState.boxes = state.boxes.map(b => b.storageId === item.id ? { ...b, isArchived: false } : b);
-      updatedState.samples = state.samples.map(s => s.storageId === item.id ? { ...s, isArchived: false } : s);
-      desc = `Restored storage unit "${item.name}".`;
-    }
-
-    saveStateToServer(updatedState, `${type.toUpperCase()} Restored`, desc);
+    const name = item.chemicalName || item.name || "item";
+    apiMutate(
+      "/api/restore",
+      "PATCH",
+      { type, item },
+      `${type.charAt(0).toUpperCase() + type.slice(1)} Restored`,
+      `Restored ${type} "${name}" and its contents.`
+    );
   };
 
   const getRestoreImpactSummary = (type: "sample" | "box" | "drawer" | "rack" | "shelf" | "storage", item: any) => {
@@ -1569,8 +1565,13 @@ export default function App() {
       }
     });
 
-    const updatedState = { ...state, samples: updatedSamples };
-    saveStateToServer(updatedState, logAct, logDesc);
+    apiMutate(
+      "/api/samples",
+      "PUT",
+      { samples: savedSamples },
+      logAct,
+      logDesc
+    );
     setSampleModalOpen(false);
     setSampleDefaultRow(null);
     setSampleDefaultCol(null);
@@ -1602,7 +1603,14 @@ export default function App() {
       setSelectedStorageId(newUnit.id);
     }
 
-    saveStateToServer({ ...state, storageUnits: updatedUnits }, logAct, logDesc);
+    const savedUnit = unit.id ? updatedUnits.find(u => u.id === unit.id)! : updatedUnits[updatedUnits.length - 1];
+    apiMutate(
+      "/api/storage-units",
+      "PUT",
+      { unit: savedUnit },
+      logAct,
+      logDesc
+    );
     setStorageModalOpen(false);
   };
 
@@ -1724,7 +1732,16 @@ export default function App() {
       }
     }
 
-    saveStateToServer({ ...state, shelves: updatedShelves, racks: updatedRacks, drawers: updatedDrawers }, logAct, logDesc);
+    const savedShelf = shelfData.id ? updatedShelves.find(s => s.id === shelfData.id)! : updatedShelves[updatedShelves.length - 1];
+    const newAutoRacks = updatedRacks.filter(r => !state.racks.some(sr => sr.id === r.id));
+    const newAutoDrawers = updatedDrawers.filter(d => !state.drawers.some(sd => sd.id === d.id));
+    apiMutate(
+      "/api/shelves",
+      "PUT",
+      { shelf: savedShelf, autoRacks: newAutoRacks, autoDrawers: newAutoDrawers },
+      logAct,
+      logDesc
+    );
     setStorageModalOpen(false);
   };
 
@@ -1815,7 +1832,15 @@ export default function App() {
 
     }
 
-    saveStateToServer({ ...state, racks: updatedRacks, drawers: updatedDrawers }, logAct, logDesc);
+    const savedRack = rackData.id ? updatedRacks.find(r => r.id === rackData.id)! : updatedRacks[updatedRacks.length - 1];
+    const newAutoDrawers = updatedDrawers.filter(d => !state.drawers.some(sd => sd.id === d.id));
+    apiMutate(
+      "/api/racks",
+      "PUT",
+      { rack: savedRack, autoDrawers: newAutoDrawers },
+      logAct,
+      logDesc
+    );
     setStorageModalOpen(false);
   };
 
@@ -1850,7 +1875,14 @@ export default function App() {
       updatedDrawers.push(newDrawer);
     }
 
-    saveStateToServer({ ...state, drawers: updatedDrawers }, logAct, logDesc);
+    const savedDrawer = drawer.id ? updatedDrawers.find(d => d.id === drawer.id)! : updatedDrawers[updatedDrawers.length - 1];
+    apiMutate(
+      "/api/drawers",
+      "PUT",
+      { drawer: savedDrawer },
+      logAct,
+      logDesc
+    );
     setStorageModalOpen(false);
   };
 
@@ -1928,7 +1960,13 @@ export default function App() {
       finalBox = newBox;
     }
 
-    saveStateToServer({ ...state, boxes: updatedBoxes }, logAct, logDesc);
+    apiMutate(
+      "/api/boxes",
+      "PUT",
+      { box: finalBox },
+      logAct,
+      logDesc
+    );
     setBoxDefaultDrawerSlot(null);
     setStorageModalOpen(false);
   };
@@ -2043,7 +2081,7 @@ export default function App() {
     setBulkSelectedIds(prev => prev.filter(id => bulkSelectableItems.some(item => item.id === id)));
   }, [bulkSelectableItems]);
 
-  const handleConfirmBulkMove = (destination: {
+  const handleConfirmBulkMove = async (destination: {
     storageId: string;
     shelfId: string;
     rackId: string | null;
@@ -2054,21 +2092,20 @@ export default function App() {
 
     if (bulkItemType === "sample") {
       const destinationBox = destination.boxId ? state.boxes.find(b => b.id === destination.boxId) : null;
-      const updatedSamples = state.samples.map(s => {
-        if (!bulkSelectedIds.includes(s.id)) return s;
-        return {
-          ...s,
-          storageId: destination.storageId,
-          shelfId: destination.shelfId,
-          rackId: destinationBox?.rackId || destination.rackId,
-          drawerId: destinationBox?.drawerId || destination.drawerId,
-          boxId: destination.boxId,
-          row: null,
-          col: null
-        };
-      });
-      saveStateToServer(
-        { ...state, samples: updatedSamples },
+      apiMutate(
+        "/api/bulk-move",
+        "PATCH",
+        {
+          itemType: "sample",
+          ids: [...bulkSelectedIds],
+          destination: {
+            storageId: destination.storageId,
+            shelfId: destination.shelfId,
+            rackId: destinationBox?.rackId || destination.rackId,
+            drawerId: destinationBox?.drawerId || destination.drawerId,
+            boxId: destination.boxId
+          }
+        },
         "Samples Bulk Relocated",
         `Moved ${bulkSelectedIds.length} sample(s) via bulk action.`
       );
@@ -2160,11 +2197,12 @@ export default function App() {
         };
       });
 
-      saveStateToServer(
-        { ...state, boxes: updatedBoxes, samples: updatedSamples },
-        "Boxes Bulk Relocated",
-        `Moved ${bulkSelectedIds.length} box(es) via bulk action.`
-      );
+      // Send each moved box via granular API (preserves drawerSlot allocation)
+      const movedBoxes = updatedBoxes.filter(b => bulkSelectedIds.includes(b.id));
+      for (const box of movedBoxes) {
+        await apiMutate("/api/boxes", "PUT", { box }, "Boxes Bulk Relocated",
+          `Moved ${bulkSelectedIds.length} box(es) via bulk action.`);
+      }
     }
 
     if (bulkItemType === "drawer") {
@@ -2176,83 +2214,35 @@ export default function App() {
       const targetRack = state.racks.find(r => r.id === destination.rackId);
       if (!targetRack) return;
 
-      const updatedDrawers = state.drawers.map(d => {
-        if (!bulkSelectedIds.includes(d.id)) return d;
-        return {
-          ...d,
-          rackId: targetRack.id,
-          shelfId: targetRack.shelfId,
-          storageId: targetRack.storageId
-        };
-      });
-
-      const updatedBoxes = state.boxes.map(b => {
-        if (!b.drawerId || !bulkSelectedIds.includes(b.drawerId)) return b;
-        return {
-          ...b,
-          rackId: targetRack.id,
-          shelfId: targetRack.shelfId,
-          storageId: targetRack.storageId
-        };
-      });
-
-      const updatedSamples = state.samples.map(s => {
-        if (!s.drawerId || !bulkSelectedIds.includes(s.drawerId)) return s;
-        return {
-          ...s,
-          rackId: targetRack.id,
-          shelfId: targetRack.shelfId,
-          storageId: targetRack.storageId
-        };
-      });
-
-      saveStateToServer(
-        { ...state, drawers: updatedDrawers, boxes: updatedBoxes, samples: updatedSamples },
+      apiMutate(
+        "/api/bulk-move",
+        "PATCH",
+        {
+          itemType: "drawer",
+          ids: [...bulkSelectedIds],
+          destination: {
+            storageId: destination.storageId,
+            shelfId: destination.shelfId,
+            rackId: destination.rackId
+          }
+        },
         "Drawers Bulk Relocated",
         `Moved ${bulkSelectedIds.length} drawer(s) via bulk action.`
       );
     }
 
     if (bulkItemType === "rack") {
-      const updatedRacks = state.racks.map(r => {
-        if (!bulkSelectedIds.includes(r.id)) return r;
-        return {
-          ...r,
-          storageId: destination.storageId,
-          shelfId: destination.shelfId,
-          shelfCol: null
-        };
-      });
-
-      const updatedDrawers = state.drawers.map(d => {
-        if (!bulkSelectedIds.includes(d.rackId)) return d;
-        return {
-          ...d,
-          storageId: destination.storageId,
-          shelfId: destination.shelfId
-        };
-      });
-
-      const updatedBoxes = state.boxes.map(b => {
-        if (!b.rackId || !bulkSelectedIds.includes(b.rackId)) return b;
-        return {
-          ...b,
-          storageId: destination.storageId,
-          shelfId: destination.shelfId
-        };
-      });
-
-      const updatedSamples = state.samples.map(s => {
-        if (!s.rackId || !bulkSelectedIds.includes(s.rackId)) return s;
-        return {
-          ...s,
-          storageId: destination.storageId,
-          shelfId: destination.shelfId
-        };
-      });
-
-      saveStateToServer(
-        { ...state, racks: updatedRacks, drawers: updatedDrawers, boxes: updatedBoxes, samples: updatedSamples },
+      apiMutate(
+        "/api/bulk-move",
+        "PATCH",
+        {
+          itemType: "rack",
+          ids: [...bulkSelectedIds],
+          destination: {
+            storageId: destination.storageId,
+            shelfId: destination.shelfId
+          }
+        },
         "Racks Bulk Relocated",
         `Moved ${bulkSelectedIds.length} rack(s) via bulk action.`
       );
@@ -2265,68 +2255,50 @@ export default function App() {
     setGridSelectionAnchorId(null);
   };
 
-  const handleBulkArchive = () => {
+  const handleBulkArchive = async () => {
     if (!bulkSelectedIds.length) return;
 
     const proceed = window.confirm(`Archive ${bulkSelectedIds.length} selected ${bulkItemType}(s)? This can be restored from Trash.`);
     if (!proceed) return;
 
     if (bulkItemType === "sample") {
-      const updatedSamples = state.samples.map(s =>
-        bulkSelectedIds.includes(s.id) ? { ...s, isArchived: true } : s
+      apiMutate(
+        "/api/samples/bulk",
+        "PATCH",
+        { ids: [...bulkSelectedIds], changes: { isArchived: true } },
+        "Samples Bulk Archived",
+        `Archived ${bulkSelectedIds.length} sample(s).`
       );
-      saveStateToServer({ ...state, samples: updatedSamples }, "Samples Bulk Archived", `Archived ${bulkSelectedIds.length} sample(s).`);
     }
 
     if (bulkItemType === "box") {
-      const updatedBoxes = state.boxes.map(b =>
-        bulkSelectedIds.includes(b.id) ? { ...b, isArchived: true } : b
-      );
-      const updatedSamples = state.samples.map(s =>
-        s.boxId && bulkSelectedIds.includes(s.boxId) ? { ...s, isArchived: true } : s
-      );
-      saveStateToServer(
-        { ...state, boxes: updatedBoxes, samples: updatedSamples },
-        "Boxes Bulk Archived",
-        `Archived ${bulkSelectedIds.length} box(es) and contained samples.`
-      );
+      // Archive each box via cascade-archive (server handles nested samples)
+      for (const boxId of bulkSelectedIds) {
+        await apiMutate(`/api/boxes/${boxId}`, "PATCH",
+          { changes: { isArchived: true }, cascadeArchive: true },
+          "Boxes Bulk Archived",
+          `Archived ${bulkSelectedIds.length} box(es) and contained samples.`);
+      }
     }
 
     if (bulkItemType === "drawer") {
-      const updatedDrawers = state.drawers.map(d =>
-        bulkSelectedIds.includes(d.id) ? { ...d, isArchived: true } : d
-      );
-      const updatedBoxes = state.boxes.map(b =>
-        b.drawerId && bulkSelectedIds.includes(b.drawerId) ? { ...b, isArchived: true } : b
-      );
-      const updatedSamples = state.samples.map(s =>
-        s.drawerId && bulkSelectedIds.includes(s.drawerId) ? { ...s, isArchived: true } : s
-      );
-      saveStateToServer(
-        { ...state, drawers: updatedDrawers, boxes: updatedBoxes, samples: updatedSamples },
-        "Drawers Bulk Archived",
-        `Archived ${bulkSelectedIds.length} drawer(s) and nested contents.`
-      );
+      // Archive each drawer via cascade-archive (server handles nested boxes+samples)
+      for (const drawerId of bulkSelectedIds) {
+        await apiMutate(`/api/drawers/${drawerId}`, "PATCH",
+          { changes: { isArchived: true }, cascadeArchive: true },
+          "Drawers Bulk Archived",
+          `Archived ${bulkSelectedIds.length} drawer(s) and nested contents.`);
+      }
     }
 
     if (bulkItemType === "rack") {
-      const updatedRacks = state.racks.map(r =>
-        bulkSelectedIds.includes(r.id) ? { ...r, isArchived: true } : r
-      );
-      const updatedDrawers = state.drawers.map(d =>
-        bulkSelectedIds.includes(d.rackId) ? { ...d, isArchived: true } : d
-      );
-      const updatedBoxes = state.boxes.map(b =>
-        b.rackId && bulkSelectedIds.includes(b.rackId) ? { ...b, isArchived: true } : b
-      );
-      const updatedSamples = state.samples.map(s =>
-        s.rackId && bulkSelectedIds.includes(s.rackId) ? { ...s, isArchived: true } : s
-      );
-      saveStateToServer(
-        { ...state, racks: updatedRacks, drawers: updatedDrawers, boxes: updatedBoxes, samples: updatedSamples },
-        "Racks Bulk Archived",
-        `Archived ${bulkSelectedIds.length} rack(s) and nested contents.`
-      );
+      // Archive each rack via cascade-archive (server handles nested drawers+boxes+samples)
+      for (const rackId of bulkSelectedIds) {
+        await apiMutate(`/api/racks/${rackId}`, "PATCH",
+          { changes: { isArchived: true }, cascadeArchive: true },
+          "Racks Bulk Archived",
+          `Archived ${bulkSelectedIds.length} rack(s) and nested contents.`);
+      }
     }
 
     setBulkSelectedIds([]);
@@ -2342,25 +2314,17 @@ export default function App() {
     newDrawers: Drawer[];
     newBoxes: Box[];
   }) => {
-    const finalStorageUnits = [...state.storageUnits, ...importedData.newStorageUnits];
-    const finalShelves = [...state.shelves, ...importedData.newShelves];
-    const finalRacks = [...state.racks, ...importedData.newRacks];
-    const finalDrawers = [...state.drawers, ...importedData.newDrawers];
-    const finalBoxes = [...state.boxes, ...importedData.newBoxes];
-    const finalSamples = [...state.samples, ...importedData.samples];
-
-    const updatedState = {
-      ...state,
-      storageUnits: finalStorageUnits,
-      shelves: finalShelves,
-      racks: finalRacks,
-      drawers: finalDrawers,
-      boxes: finalBoxes,
-      samples: finalSamples
-    };
-
-    saveStateToServer(
-      updatedState,
+    apiMutate(
+      "/api/bulk-import",
+      "POST",
+      {
+        samples: importedData.samples,
+        newStorageUnits: importedData.newStorageUnits,
+        newShelves: importedData.newShelves,
+        newRacks: importedData.newRacks,
+        newDrawers: importedData.newDrawers,
+        newBoxes: importedData.newBoxes
+      },
       "Bulk CSV Import",
       `Successfully imported ${importedData.samples.length} items from external sheet with header mapping.`
     );
@@ -2408,24 +2372,17 @@ export default function App() {
     }
 
     // Move sample to selected location
-    const updatedSamples = state.samples.map(s => {
-      if (s.id === sampleId) {
-        return {
-          ...s,
-          storageId: selectedStorageId,
-          shelfId: selectedShelfId,
-          boxId: selectedBoxId,
-          row: targetRow,
-          col: targetCol
-        };
-      }
-      return s;
-    });
-
     const boxName = currentBox?.name || "Target Box";
-    const updatedState = { ...state, samples: updatedSamples };
-    saveStateToServer(
-      updatedState,
+    apiMutate(
+      `/api/samples/${sampleId}`,
+      "PATCH",
+      {
+        storageId: selectedStorageId,
+        shelfId: selectedShelfId,
+        boxId: selectedBoxId,
+        row: targetRow,
+        col: targetCol
+      },
       "Sample Relocated",
       `Relocated "${targetSample.chemicalName}" to ${boxName} [Row ${targetRow}, Col ${targetCol}] via drag-and-drop.`
     );
@@ -2620,16 +2577,32 @@ export default function App() {
       }
     }
     
-    if (actionName && actionDesc) {
-      const nextState = {
-        ...state,
-        racks: updatedRacks,
-        drawers: updatedDrawers,
-        boxes: updatedBoxes,
-        samples: updatedSamples
-      };
-      saveStateToServer(nextState, actionName, actionDesc);
-    }
+      if (actionName && actionDesc) {
+        // Extract destination from the target entity for the bulk-move API
+        const destEntity =
+          targetType === "drawer" ? state.drawers.find(d => d.id === targetId) :
+          targetType === "rack" ? state.racks.find(r => r.id === targetId) :
+          targetType === "shelf" ? state.shelves.find(s => s.id === targetId) : null;
+        if (destEntity) {
+          apiMutate(
+            "/api/bulk-move",
+            "PATCH",
+            {
+              itemType: draggedType,
+              ids: [draggedId],
+              destination: {
+                storageId: destEntity.storageId,
+                shelfId: "shelfId" in destEntity ? destEntity.shelfId : undefined,
+                rackId: "rackId" in destEntity ? destEntity.rackId : undefined,
+                drawerId: targetType === "drawer" ? destEntity.id : undefined,
+                shelfCol: targetCol !== undefined ? targetCol : undefined
+              }
+            },
+            actionName,
+            actionDesc
+          );
+        }
+      }
   };
 
   // Capacity visual calculation
@@ -4555,14 +4528,10 @@ export default function App() {
                                           ) : (
                                             <button
                                               onClick={() => {
-                                                const updatedSamples = state.samples.map(s => {
-                                                  if (s.id === sample.id) {
-                                                    return { ...s, rackId: null, drawerId: null, boxId: null, row: null, col: null };
-                                                  }
-                                                  return s;
-                                                });
-                                                saveStateToServer(
-                                                  { ...state, samples: updatedSamples },
+                                                apiMutate(
+                                                  `/api/samples/${sample.id}`,
+                                                  "PATCH",
+                                                  { rackId: null, drawerId: null, boxId: null, row: null, col: null },
                                                   "Sample Relocated",
                                                   `Removed "${sample.chemicalName}" from box/drawer to make it loose on shelf.`
                                                 );
