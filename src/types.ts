@@ -156,6 +156,7 @@ export interface AuditSnapshot {
 }
 
 export interface InventoryState {
+  version: number; // Optimistic concurrency control — server increments on each save
   users: string[];
   storageUnits: StorageUnit[];
   shelves: Shelf[];

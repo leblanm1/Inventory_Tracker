@@ -477,7 +477,7 @@ function getDemoState(): InventoryState {
   const racks: Rack[] = [];
   const drawers: Drawer[] = [];
 
-  return { users: DEFAULT_USERS, storageUnits, shelves, racks, drawers, boxes, samples, auditLogs, auditSnapshots: [] };
+  return { version: 0, users: DEFAULT_USERS, storageUnits, shelves, racks, drawers, boxes, samples, auditLogs, auditSnapshots: [] };
 }
 
 // Function to load inventory state
@@ -502,6 +502,7 @@ async function loadState(): Promise<InventoryState> {
       1000
     );
     return {
+      version: typeof parsed.version === "number" ? parsed.version : 0,
       users: sanitizeUsers(parsed.users),
       storageUnits: parsed.storageUnits || [],
       shelves: parsed.shelves || [],
@@ -613,6 +614,21 @@ async function startServer() {
       // Preserve audit history even if a client payload is missing/older.
       const existingState = await loadState();
 
+      // Optimistic concurrency control: reject if the client's version doesn't
+      // match the server's current version. This prevents silent data loss when
+      // two clients edit simultaneously (last-write-wins without this check).
+      const clientVersion = typeof newState.version === "number" ? newState.version : 0;
+      const serverVersion = existingState.version;
+      if (clientVersion !== serverVersion) {
+        res.status(409).json({
+          error: "Version conflict: another user has modified the inventory since you last loaded it. Please refresh and try again.",
+          serverVersion,
+          clientVersion,
+          serverState: existingState
+        });
+        return;
+      }
+
       const incomingAuditLogs = Array.isArray(newState.auditLogs) ? newState.auditLogs : [];
       const incomingAuditSnapshots = Array.isArray(newState.auditSnapshots) ? newState.auditSnapshots : [];
 
@@ -633,8 +649,9 @@ async function startServer() {
       newState.users = sanitizeUsers(newState.users);
       newState.auditLogs = mergedAuditLogs;
       newState.auditSnapshots = mergedAuditSnapshots;
+      newState.version = serverVersion + 1;
       await saveState(newState);
-      res.json({ success: true, message: "Inventory state saved successfully" });
+      res.json({ success: true, message: "Inventory state saved successfully", version: newState.version });
     } catch (err) {
       res.status(500).json({ error: "Failed to save inventory state" });
     }
@@ -689,7 +706,8 @@ async function startServer() {
         description: `Database fully restored from backup file containing ${importedState.samples.length} samples.`
       };
       importedState.auditLogs = [restoreLog, ...(importedState.auditLogs || [])];
-      
+      importedState.version = 1; // Reset version after full restore
+
       await saveState(importedState);
       res.json({ success: true, state: importedState });
     } catch (err) {

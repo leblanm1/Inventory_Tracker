@@ -87,6 +87,7 @@ export default function App() {
 
   // State from server
   const [state, setState] = useState<InventoryState>({
+    version: 0,
     users: DEFAULT_USERS,
     storageUnits: [],
     shelves: [],
@@ -347,6 +348,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         const normalized = {
+          version: typeof data.version === "number" ? data.version : 0,
           users: Array.isArray(data.users) && data.users.length > 0
             ? data.users.filter((u: unknown) => typeof u === "string" && u.trim().length > 0)
             : DEFAULT_USERS,
@@ -469,62 +471,126 @@ export default function App() {
     );
   }, [selectedStorageId, selectedShelfId, selectedRackId, selectedDrawerId, selectedBoxId]);
 
-  // Save changes to backend server
+  // Save changes to backend server with optimistic concurrency control.
+  // The server tracks a version number; if another user saved since we last
+  // loaded, the server returns 409 and we re-fetch + retry once before
+  // alerting the user to manually refresh.
   const saveStateToServer = async (updatedState: InventoryState, logAction: string, logDesc: string) => {
     try {
       setSyncing(true);
-      
-      // Append a rich audit log automatically
-      const now = new Date().toISOString();
-      const newLog: AuditLog = {
-        id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        timestamp: now,
-        user: currentUser,
-        action: logAction,
-        description: logDesc
+
+      const buildPayload = (baseState: InventoryState, currentVersion: number) => {
+        const now = new Date().toISOString();
+        const newLog: AuditLog = {
+          id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+          timestamp: now,
+          user: currentUser,
+          action: logAction,
+          description: logDesc
+        };
+
+        const newSnapshot: AuditSnapshot = {
+          id: `snap-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+          logId: newLog.id,
+          timestamp: now,
+          user: currentUser,
+          action: logAction,
+          description: logDesc,
+          users: Array.from(new Set([...(baseState.users || []), currentUser])).filter(Boolean),
+          storageUnits: baseState.storageUnits || [],
+          shelves: baseState.shelves || [],
+          racks: baseState.racks || [],
+          drawers: baseState.drawers || [],
+          boxes: baseState.boxes || [],
+          samples: baseState.samples || []
+        };
+
+        const finalState = {
+          ...baseState,
+          version: currentVersion,
+          users: Array.from(new Set([...(baseState.users || []), currentUser])).filter(Boolean),
+          auditLogs: [newLog, ...(baseState.auditLogs || [])].slice(0, 1000),
+          auditSnapshots: [newSnapshot, ...(baseState.auditSnapshots || [])].slice(0, 1000)
+        };
+
+        // Send only incremental audit entries to keep request bodies small.
+        const payloadForServer: InventoryState = {
+          ...finalState,
+          auditLogs: [newLog],
+          auditSnapshots: [newSnapshot]
+        };
+
+        return { finalState, payloadForServer };
       };
 
-      const newSnapshot: AuditSnapshot = {
-        id: `snap-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        logId: newLog.id,
-        timestamp: now,
-        user: currentUser,
-        action: logAction,
-        description: logDesc,
-        users: Array.from(new Set([...(updatedState.users || []), currentUser])).filter(Boolean),
-        storageUnits: updatedState.storageUnits || [],
-        shelves: updatedState.shelves || [],
-        racks: updatedState.racks || [],
-        drawers: updatedState.drawers || [],
-        boxes: updatedState.boxes || [],
-        samples: updatedState.samples || []
+      const attemptSave = async (baseState: InventoryState, currentVersion: number): Promise<boolean> => {
+        const { finalState, payloadForServer } = buildPayload(baseState, currentVersion);
+
+        const res = await fetch("/api/inventory", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payloadForServer)
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const newVersion = typeof data.version === "number" ? data.version : currentVersion + 1;
+          setState({ ...finalState, version: newVersion });
+          return true;
+        }
+
+        if (res.status === 409) {
+          // Version conflict — another user saved since we last loaded.
+          const conflictData = await res.json().catch(() => null);
+          const serverVersion = typeof conflictData?.serverVersion === "number"
+            ? conflictData.serverVersion
+            : currentVersion;
+
+          // Re-fetch the latest server state to get a clean baseline.
+          const freshRes = await fetch("/api/inventory");
+          if (!freshRes.ok) {
+            console.error("Version conflict and failed to re-fetch server state.");
+            return false;
+          }
+          const freshData = await freshRes.json();
+          const freshState: InventoryState = {
+            version: typeof freshData.version === "number" ? freshData.version : serverVersion,
+            users: Array.isArray(freshData.users) && freshData.users.length > 0
+              ? freshData.users.filter((u: unknown) => typeof u === "string" && u.trim().length > 0)
+              : DEFAULT_USERS,
+            storageUnits: freshData.storageUnits || [],
+            shelves: freshData.shelves || [],
+            racks: freshData.racks || [],
+            drawers: freshData.drawers || [],
+            boxes: freshData.boxes || [],
+            samples: freshData.samples || [],
+            auditLogs: freshData.auditLogs || [],
+            auditSnapshots: freshData.auditSnapshots || []
+          };
+
+          // Update local state to the server's current version so the user
+          // sees the latest data, then retry the save once with the new version.
+          setState(freshState);
+
+          // Re-apply the user's intended change on top of the fresh state.
+          // We reuse updatedState (the caller's intended mutation) but stamp
+          // the fresh version so the retry can succeed.
+          const retryResult = await attemptSave(updatedState, freshState.version);
+          if (!retryResult) {
+            alert(
+              "Another lab member modified the inventory while you were editing. " +
+              "Your change could not be saved automatically. Please review the updated " +
+              "inventory and try your action again."
+            );
+          }
+          return retryResult;
+        }
+
+        console.error("Server rejected the state sync with status:", res.status);
+        return false;
       };
 
-      const finalState = {
-        ...updatedState,
-        users: Array.from(new Set([...(updatedState.users || []), currentUser])).filter(Boolean),
-        auditLogs: [newLog, ...(updatedState.auditLogs || [])].slice(0, 1000),
-        auditSnapshots: [newSnapshot, ...(updatedState.auditSnapshots || [])].slice(0, 1000)
-      };
-
-      // Send only incremental audit entries to keep request bodies small.
-      const payloadForServer: InventoryState = {
-        ...finalState,
-        auditLogs: [newLog],
-        auditSnapshots: [newSnapshot]
-      };
-
-      const res = await fetch("/api/inventory", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payloadForServer)
-      });
-
-      if (res.ok) {
-        setState(finalState);
-      } else {
-        console.error("Server rejected the state sync.");
-      }
+      await attemptSave(updatedState, state.version);
     } catch (err) {
       console.error("Failed to sync inventory changes to cloud container:", err);
     } finally {
