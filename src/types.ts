@@ -153,13 +153,16 @@ export interface AuditSnapshot {
   user: string;
   action: string;
   description: string;
-  users: string[];
-  storageUnits: StorageUnit[];
-  shelves: Shelf[];
-  racks: Rack[];
-  drawers: Drawer[];
-  boxes: Box[];
-  samples: Sample[];
+  // Payload fields are optional — snapshots are stored as lightweight metadata
+  // on disk and in server responses.  Full payloads are only kept in the
+  // client's React state for in-session restore/undo functionality.
+  users?: string[];
+  storageUnits?: StorageUnit[];
+  shelves?: Shelf[];
+  racks?: Rack[];
+  drawers?: Drawer[];
+  boxes?: Box[];
+  samples?: Sample[];
 }
 
 export interface InventoryState {

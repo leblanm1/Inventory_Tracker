@@ -323,7 +323,8 @@ export default function App() {
         col: updatedSample.col
       },
       "Sample Relocated",
-      `Assigned sample "${sample.chemicalName}" to ${destType} "${destName}" via quick assignment.`
+      `Assigned sample "${sample.chemicalName}" to ${destType} "${destName}" via quick assignment.`,
+      { ...state, samples: state.samples.map(s => s.id === sampleId ? updatedSample : s) }
     );
   };
 
@@ -576,10 +577,24 @@ export default function App() {
         };
 
         // Send only incremental audit entries to keep request bodies small.
+        // The snapshot payload is stripped to metadata-only for the server
+        // trip — the full snapshot is retained in finalState (client-side)
+        // for restore/undo functionality.  This avoids sending a 3 MB
+        // snapshot over the network on every save.
+        const lightweightSnapshot: AuditSnapshot = {
+          ...newSnapshot,
+          users: [],
+          storageUnits: [],
+          shelves: [],
+          racks: [],
+          drawers: [],
+          boxes: [],
+          samples: []
+        };
         const payloadForServer: InventoryState = {
           ...finalState,
           auditLogs: [newLog],
-          auditSnapshots: [newSnapshot]
+          auditSnapshots: [lightweightSnapshot]
         };
 
         return { finalState, payloadForServer };
@@ -673,12 +688,26 @@ export default function App() {
     method: "PUT" | "PATCH" | "POST",
     body: object,
     _action: string,
-    _description: string
+    _description: string,
+    /** Optional optimistic state update to apply immediately. When provided,
+     *  the client applies this state locally and only uses the server response
+     *  for the version number and audit entries — avoiding a full state
+     *  replacement and re-render on every mutation. */
+    optimisticState?: InventoryState
   ): Promise<InventoryState | null> => {
     try {
       setSyncing(true);
 
-      const attempt = async (version: number): Promise<InventoryState | null> => {
+      // Apply optimistic update immediately if provided.  This makes the UI
+      // feel instant — the user sees their change without waiting for the
+      // network round-trip.
+      if (optimisticState) {
+        setState(optimisticState);
+      }
+
+      // `useOptimistic` is false on retry after a 409 conflict, because the
+      // optimistic state was computed against the stale pre-conflict state.
+      const attempt = async (version: number, useOptimistic: boolean): Promise<InventoryState | null> => {
         const res = await authFetch(endpoint, {
           method,
           headers: {
@@ -692,9 +721,42 @@ export default function App() {
         if (res.ok) {
           const data = await res.json();
           const newVersion = typeof data.version === "number" ? data.version : version + 1;
+
+          if (useOptimistic && optimisticState) {
+            // Optimistic path: the local state is already correct.  Just
+            // bump the version and merge in the new audit entries from the
+            // server.  No full state replacement, no full re-render.
+            const updatedOptimistic: InventoryState = {
+              ...optimisticState,
+              version: newVersion,
+              auditLogs: data.auditLog
+                ? [data.auditLog, ...(optimisticState.auditLogs || [])].slice(0, 1000)
+                : optimisticState.auditLogs,
+              auditSnapshots: data.auditSnapshot
+                ? [data.auditSnapshot, ...(optimisticState.auditSnapshots || [])].slice(0, 1000)
+                : optimisticState.auditSnapshots
+            };
+            setState(updatedOptimistic);
+            return updatedOptimistic;
+          }
+
+          // Non-optimistic path: the server no longer returns the full
+          // state (it returns only version + audit delta).  We keep the
+          // current state and bump the version, merging in the new audit
+          // entries from the server response.
+          const base = state;
           const newState: InventoryState = data.state
             ? { ...data.state, version: newVersion }
-            : { ...state, version: newVersion };
+            : {
+                ...base,
+                version: newVersion,
+                auditLogs: data.auditLog
+                  ? [data.auditLog, ...(base.auditLogs || [])].slice(0, 1000)
+                  : base.auditLogs,
+                auditSnapshots: data.auditSnapshot
+                  ? [data.auditSnapshot, ...(base.auditSnapshots || [])].slice(0, 1000)
+                  : base.auditSnapshots
+              };
           setState(newState);
           return newState;
         }
@@ -728,7 +790,9 @@ export default function App() {
           };
           setState(freshState);
 
-          const retryResult = await attempt(freshState.version);
+          // Retry with the fresh server version, discarding the optimistic
+          // state (it was computed against the stale pre-conflict state).
+          const retryResult = await attempt(freshState.version, false);
           if (!retryResult) {
             alert(
               "Another lab member modified the inventory while you were editing. " +
@@ -743,7 +807,7 @@ export default function App() {
         return null;
       };
 
-      return await attempt(state.version);
+      return await attempt(state.version, !!optimisticState);
     } catch (err) {
       console.error("Failed to sync granular change to server:", err);
       return null;
@@ -781,7 +845,8 @@ export default function App() {
       "PATCH",
       { users: uniqueUsers },
       "Users Updated",
-      `Updated users list to ${uniqueUsers.length} member(s).`
+      `Updated users list to ${uniqueUsers.length} member(s).`,
+      { ...state, users: uniqueUsers }
     );
   };
 
@@ -834,18 +899,29 @@ export default function App() {
       return;
     }
 
+    // Snapshots from previous sessions may not have a full state payload
+    // (only metadata is persisted to disk).  In that case, we cannot restore.
+    if (!snapshot.samples || snapshot.samples.length === 0) {
+      alert(
+        "This snapshot was created in a previous session and only metadata " +
+        "was preserved. Restore is available for snapshots created in the " +
+        "current session only."
+      );
+      return;
+    }
+
     const confirmed = window.confirm(`Restore inventory to this point in time?\n${snapshot.action} (${new Date(snapshot.timestamp).toLocaleString()})`);
     if (!confirmed) return;
 
     const restoredState: InventoryState = {
       ...state,
-      users: snapshot.users,
-      storageUnits: snapshot.storageUnits,
-      shelves: snapshot.shelves,
-      racks: snapshot.racks,
-      drawers: snapshot.drawers,
-      boxes: snapshot.boxes,
-      samples: snapshot.samples
+      users: snapshot.users || state.users,
+      storageUnits: snapshot.storageUnits || [],
+      shelves: snapshot.shelves || [],
+      racks: snapshot.racks || [],
+      drawers: snapshot.drawers || [],
+      boxes: snapshot.boxes || [],
+      samples: snapshot.samples || []
     };
 
     saveStateToServer(
@@ -1483,7 +1559,8 @@ export default function App() {
         "PATCH",
         { isArchived: true },
         "Sample Archived",
-        `Archived/deleted sample "${name}" from its location.`
+        `Archived/deleted sample "${name}" from its location.`,
+        { ...state, samples: state.samples.map(s => s.id === id ? { ...s, isArchived: true } : s) }
       );
       if (selectedSampleId === id) setSelectedSampleId(null);
       setSelectedGridSampleIds(prev => prev.filter(sampleId => sampleId !== id));
@@ -1503,7 +1580,8 @@ export default function App() {
       "PATCH",
       { ids: [...selectedGridSampleIds], changes: { isArchived: true } },
       "Samples Bulk Archived",
-      `Archived ${selectedCount} selected sample(s) from the current box.`
+      `Archived ${selectedCount} selected sample(s) from the current box.`,
+      { ...state, samples: state.samples.map(s => selectedGridSampleIds.includes(s.id) ? { ...s, isArchived: true } : s) }
     );
 
     if (selectedSampleId && selectedGridSampleIds.includes(selectedSampleId)) {
@@ -1528,7 +1606,8 @@ export default function App() {
       "PATCH",
       { qty: 0 },
       "Sample Depleted",
-      `Marked sample "${name}" as depleted (0 qty).`
+      `Marked sample "${name}" as depleted (0 qty).`,
+      { ...state, samples: state.samples.map(s => s.id === id ? { ...s, qty: 0 } : s) }
     );
   };
 
@@ -1539,7 +1618,9 @@ export default function App() {
         "PATCH",
         { changes: { isArchived: true }, cascadeArchive: true },
         "Box Archived",
-        `Archived box "${name}" along with its contained samples.`
+        `Archived box "${name}" along with its contained samples.`,
+        { ...state, boxes: state.boxes.map(b => b.id === id ? { ...b, isArchived: true } : b),
+          samples: state.samples.map(s => s.boxId === id ? { ...s, isArchived: true } : s) }
       );
       setSelectedBoxId(null);
     }
@@ -1552,7 +1633,12 @@ export default function App() {
         "PATCH",
         { changes: { isArchived: true }, cascadeArchive: true },
         "Shelf Archived",
-        `Archived shelf "${name}" and all sub-containers.`
+        `Archived shelf "${name}" and all sub-containers.`,
+        { ...state, shelves: state.shelves.map(s => s.id === id ? { ...s, isArchived: true } : s),
+          racks: state.racks.map(r => r.shelfId === id ? { ...r, isArchived: true } : r),
+          drawers: state.drawers.map(d => d.shelfId === id ? { ...d, isArchived: true } : d),
+          boxes: state.boxes.map(b => b.shelfId === id ? { ...b, isArchived: true } : b),
+          samples: state.samples.map(s => s.shelfId === id ? { ...s, isArchived: true } : s) }
       );
       setSelectedShelfId("");
       setSelectedRackId("");
@@ -1568,7 +1654,11 @@ export default function App() {
         "PATCH",
         { changes: { isArchived: true }, cascadeArchive: true },
         "Rack Archived",
-        `Archived rack "${name}" and all nested sub-containers.`
+        `Archived rack "${name}" and all nested sub-containers.`,
+        { ...state, racks: state.racks.map(r => r.id === id ? { ...r, isArchived: true } : r),
+          drawers: state.drawers.map(d => d.rackId === id ? { ...d, isArchived: true } : d),
+          boxes: state.boxes.map(b => b.rackId === id ? { ...b, isArchived: true } : b),
+          samples: state.samples.map(s => s.rackId === id ? { ...s, isArchived: true } : s) }
       );
       setSelectedRackId("");
       setSelectedDrawerId("");
@@ -1583,7 +1673,10 @@ export default function App() {
         "PATCH",
         { changes: { isArchived: true }, cascadeArchive: true },
         "Drawer Archived",
-        `Archived drawer "${name}" and all nested containers.`
+        `Archived drawer "${name}" and all nested containers.`,
+        { ...state, drawers: state.drawers.map(d => d.id === id ? { ...d, isArchived: true } : d),
+          boxes: state.boxes.map(b => b.drawerId === id ? { ...b, isArchived: true } : b),
+          samples: state.samples.map(s => s.drawerId === id ? { ...s, isArchived: true } : s) }
       );
       setSelectedDrawerId("");
       setSelectedBoxId(null);
@@ -1597,7 +1690,13 @@ export default function App() {
         "PATCH",
         { changes: { isArchived: true }, cascadeArchive: true },
         "Storage Unit Archived",
-        `Archived storage unit "${name}" and all nested items.`
+        `Archived storage unit "${name}" and all nested items.`,
+        { ...state, storageUnits: state.storageUnits.map(u => u.id === id ? { ...u, isArchived: true } : u),
+          shelves: state.shelves.map(s => s.storageId === id ? { ...s, isArchived: true } : s),
+          racks: state.racks.map(r => r.storageId === id ? { ...r, isArchived: true } : r),
+          drawers: state.drawers.map(d => d.storageId === id ? { ...d, isArchived: true } : d),
+          boxes: state.boxes.map(b => b.storageId === id ? { ...b, isArchived: true } : b),
+          samples: state.samples.map(s => s.storageId === id ? { ...s, isArchived: true } : s) }
       );
       
       const nextActive = state.storageUnits.find(u => u.id !== id && !u.isArchived);
@@ -1695,7 +1794,8 @@ export default function App() {
       "PUT",
       { samples: savedSamples },
       logAct,
-      logDesc
+      logDesc,
+      { ...state, samples: updatedSamples }
     );
     setSampleModalOpen(false);
     setSampleDefaultRow(null);
@@ -1734,7 +1834,8 @@ export default function App() {
       "PUT",
       { unit: savedUnit },
       logAct,
-      logDesc
+      logDesc,
+      { ...state, storageUnits: updatedUnits }
     );
     setStorageModalOpen(false);
   };
@@ -1865,7 +1966,8 @@ export default function App() {
       "PUT",
       { shelf: savedShelf, autoRacks: newAutoRacks, autoDrawers: newAutoDrawers },
       logAct,
-      logDesc
+      logDesc,
+      { ...state, shelves: updatedShelves, racks: updatedRacks, drawers: updatedDrawers }
     );
     setStorageModalOpen(false);
   };
@@ -1964,7 +2066,8 @@ export default function App() {
       "PUT",
       { rack: savedRack, autoDrawers: newAutoDrawers },
       logAct,
-      logDesc
+      logDesc,
+      { ...state, racks: updatedRacks, drawers: updatedDrawers }
     );
     setStorageModalOpen(false);
   };
@@ -2006,7 +2109,8 @@ export default function App() {
       "PUT",
       { drawer: savedDrawer },
       logAct,
-      logDesc
+      logDesc,
+      { ...state, drawers: updatedDrawers }
     );
     setStorageModalOpen(false);
   };
@@ -2090,7 +2194,8 @@ export default function App() {
       "PUT",
       { box: finalBox },
       logAct,
-      logDesc
+      logDesc,
+      { ...state, boxes: updatedBoxes }
     );
     setBoxDefaultDrawerSlot(null);
     setStorageModalOpen(false);
@@ -2232,7 +2337,8 @@ export default function App() {
           }
         },
         "Samples Bulk Relocated",
-        `Moved ${bulkSelectedIds.length} sample(s) via bulk action.`
+        `Moved ${bulkSelectedIds.length} sample(s) via bulk action.`,
+        { ...state, samples: state.samples.map(s => bulkSelectedIds.includes(s.id) ? { ...s, storageId: destination.storageId, shelfId: destination.shelfId, rackId: destinationBox?.rackId || destination.rackId, drawerId: destinationBox?.drawerId || destination.drawerId, boxId: destination.boxId } : s) }
       );
     }
 
@@ -2326,7 +2432,8 @@ export default function App() {
       const movedBoxes = updatedBoxes.filter(b => bulkSelectedIds.includes(b.id));
       for (const box of movedBoxes) {
         await apiMutate("/api/boxes", "PUT", { box }, "Boxes Bulk Relocated",
-          `Moved ${bulkSelectedIds.length} box(es) via bulk action.`);
+          `Moved ${bulkSelectedIds.length} box(es) via bulk action.`,
+          { ...state, boxes: updatedBoxes, samples: updatedSamples });
       }
     }
 
@@ -2352,7 +2459,8 @@ export default function App() {
           }
         },
         "Drawers Bulk Relocated",
-        `Moved ${bulkSelectedIds.length} drawer(s) via bulk action.`
+        `Moved ${bulkSelectedIds.length} drawer(s) via bulk action.`,
+        { ...state, drawers: state.drawers.map(d => bulkSelectedIds.includes(d.id) ? { ...d, rackId: destination.rackId, shelfId: destination.shelfId, storageId: destination.storageId } : d) }
       );
     }
 
@@ -2369,7 +2477,8 @@ export default function App() {
           }
         },
         "Racks Bulk Relocated",
-        `Moved ${bulkSelectedIds.length} rack(s) via bulk action.`
+        `Moved ${bulkSelectedIds.length} rack(s) via bulk action.`,
+        { ...state, racks: state.racks.map(r => bulkSelectedIds.includes(r.id) ? { ...r, shelfId: destination.shelfId, storageId: destination.storageId } : r) }
       );
     }
 
@@ -2392,7 +2501,8 @@ export default function App() {
         "PATCH",
         { ids: [...bulkSelectedIds], changes: { isArchived: true } },
         "Samples Bulk Archived",
-        `Archived ${bulkSelectedIds.length} sample(s).`
+        `Archived ${bulkSelectedIds.length} sample(s).`,
+        { ...state, samples: state.samples.map(s => bulkSelectedIds.includes(s.id) ? { ...s, isArchived: true } : s) }
       );
     }
 
@@ -2439,6 +2549,10 @@ export default function App() {
     newDrawers: Drawer[];
     newBoxes: Box[];
   }) => {
+    const mergeArrays = <T extends { id: string }>(existing: T[], incoming: T[]): T[] => {
+      const newIds = new Set(incoming.map(i => i.id));
+      return [...incoming, ...existing.filter(e => !newIds.has(e.id))];
+    };
     apiMutate(
       "/api/bulk-import",
       "POST",
@@ -2451,7 +2565,16 @@ export default function App() {
         newBoxes: importedData.newBoxes
       },
       "Bulk CSV Import",
-      `Successfully imported ${importedData.samples.length} items from external sheet with header mapping.`
+      `Successfully imported ${importedData.samples.length} items from external sheet with header mapping.`,
+      {
+        ...state,
+        storageUnits: mergeArrays(state.storageUnits, importedData.newStorageUnits),
+        shelves: mergeArrays(state.shelves, importedData.newShelves),
+        racks: mergeArrays(state.racks, importedData.newRacks),
+        drawers: mergeArrays(state.drawers, importedData.newDrawers),
+        boxes: mergeArrays(state.boxes, importedData.newBoxes),
+        samples: mergeArrays(state.samples, importedData.samples)
+      }
     );
     setShowBulkImport(false);
   };
@@ -2526,7 +2649,8 @@ export default function App() {
         col: targetCol
       },
       "Sample Relocated",
-      `Relocated "${targetSample.chemicalName}" to ${boxName} [Row ${targetRow}, Col ${targetCol}] via drag-and-drop.`
+      `Relocated "${targetSample.chemicalName}" to ${boxName} [Row ${targetRow}, Col ${targetCol}] via drag-and-drop.`,
+      { ...state, samples: state.samples.map(s => s.id === sampleId ? { ...s, storageId: selectedStorageId, shelfId: selectedShelfId, boxId: selectedBoxId, row: targetRow, col: targetCol } : s) }
     );
 
     setSelectedSampleId(sampleId);
@@ -2741,7 +2865,8 @@ export default function App() {
               }
             },
             actionName,
-            actionDesc
+            actionDesc,
+            { ...state, racks: updatedRacks, drawers: updatedDrawers, boxes: updatedBoxes, samples: updatedSamples }
           );
         }
       }
@@ -4842,7 +4967,8 @@ export default function App() {
                                                   "PATCH",
                                                   { rackId: null, drawerId: null, boxId: null, row: null, col: null },
                                                   "Sample Relocated",
-                                                  `Removed "${sample.chemicalName}" from box/drawer to make it loose on shelf.`
+                                                  `Removed "${sample.chemicalName}" from box/drawer to make it loose on shelf.`,
+                                                  { ...state, samples: state.samples.map(s => s.id === sample.id ? { ...s, rackId: null, drawerId: null, boxId: null, row: null, col: null } : s) }
                                                 );
                                               }}
                                               className="text-[10px] text-slate-400 hover:text-orange-600 font-bold border border-slate-200 hover:border-orange-200 bg-white hover:bg-orange-50 px-2 py-1 rounded transition-colors cursor-pointer"

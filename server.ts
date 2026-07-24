@@ -8,7 +8,7 @@ import net from "node:net";
 import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import { createServer as createViteServer } from "vite";
-import { InventoryState, StorageUnit, Shelf, Box, Sample, AuditLog, Rack, Drawer } from "./src/types.js";
+import { InventoryState, StorageUnit, Shelf, Box, Sample, AuditLog, AuditSnapshot, Rack, Drawer } from "./src/types.js";
 
 // Helper to get directory path
 const __dirname = path.resolve();
@@ -38,7 +38,11 @@ function sanitizeUsers(users: unknown): string[] {
 
 type SnapshotRecord = {
   id: string;
+  logId?: string;
   timestamp?: string;
+  user?: string;
+  action?: string;
+  description?: string;
 };
 
 function mergeSnapshots(
@@ -482,63 +486,124 @@ function getDemoState(): InventoryState {
 }
 
 // Function to load inventory state
+// ---------------------------------------------------------------------------
+// In-memory state cache
+//
+// Reading and parsing the 23 MB inventory.json on every request was the
+// primary source of UI lag.  We now keep the parsed state in memory and only
+// touch disk on startup (cold load) and on writes (persistence).  All reads
+// are served from the cache, which is updated synchronously after each
+// successful save.
+// ---------------------------------------------------------------------------
+
+let cachedState: InventoryState | null = null;
+
+/** Cold-load the state from disk into the in-memory cache. */
+async function loadStateFromDisk(): Promise<InventoryState> {
+  await migrateLegacyDataIfNeeded();
+  if (!existsSync(DATA_DIR)) {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+  }
+  if (!existsSync(DATA_FILE)) {
+    const demo = getDemoState();
+    await fs.writeFile(DATA_FILE, JSON.stringify(demo, null, 2), "utf-8");
+    await saveSnapshotArchive((demo.auditSnapshots || []) as SnapshotRecord[]);
+    return demo;
+  }
+  const content = await fs.readFile(DATA_FILE, "utf-8");
+  const parsed = JSON.parse(content) as Partial<InventoryState>;
+  const archivedSnapshots = await loadSnapshotArchive();
+  const mergedSnapshots = mergeSnapshots(
+    (parsed.auditSnapshots || []) as SnapshotRecord[],
+    archivedSnapshots,
+    1000
+  );
+  return {
+    version: typeof parsed.version === "number" ? parsed.version : 0,
+    users: sanitizeUsers(parsed.users),
+    storageUnits: parsed.storageUnits || [],
+    shelves: parsed.shelves || [],
+    racks: parsed.racks || [],
+    drawers: parsed.drawers || [],
+    boxes: parsed.boxes || [],
+    samples: parsed.samples || [],
+    auditLogs: parsed.auditLogs || [],
+    auditSnapshots: mergedSnapshots as InventoryState["auditSnapshots"]
+  };
+}
+
+/**
+ * Return the current inventory state.
+ *
+ * Serves from the in-memory cache; only touches disk on the very first call
+ * (cold start) or after an explicit cache invalidation.
+ */
 async function loadState(): Promise<InventoryState> {
+  if (cachedState) return cachedState;
   try {
-    await migrateLegacyDataIfNeeded();
-    if (!existsSync(DATA_DIR)) {
-      await fs.mkdir(DATA_DIR, { recursive: true });
-    }
-    if (!existsSync(DATA_FILE)) {
-      const demo = getDemoState();
-      await fs.writeFile(DATA_FILE, JSON.stringify(demo, null, 2), "utf-8");
-      await saveSnapshotArchive((demo.auditSnapshots || []) as SnapshotRecord[]);
-      return demo;
-    }
-    const content = await fs.readFile(DATA_FILE, "utf-8");
-    const parsed = JSON.parse(content) as Partial<InventoryState>;
-    const archivedSnapshots = await loadSnapshotArchive();
-    const mergedSnapshots = mergeSnapshots(
-      (parsed.auditSnapshots || []) as SnapshotRecord[],
-      archivedSnapshots,
-      1000
-    );
-    return {
-      version: typeof parsed.version === "number" ? parsed.version : 0,
-      users: sanitizeUsers(parsed.users),
-      storageUnits: parsed.storageUnits || [],
-      shelves: parsed.shelves || [],
-      racks: parsed.racks || [],
-      drawers: parsed.drawers || [],
-      boxes: parsed.boxes || [],
-      samples: parsed.samples || [],
-      auditLogs: parsed.auditLogs || [],
-      auditSnapshots: mergedSnapshots as InventoryState["auditSnapshots"]
-    };
+    cachedState = await loadStateFromDisk();
+    return cachedState;
   } catch (err) {
     console.error("Error loading inventory state:", err);
-    return getDemoState();
+    cachedState = getDemoState();
+    return cachedState;
   }
 }
 
-// Function to save inventory state
+/** Force the next `loadState()` to re-read from disk (used by tests/import). */
+function invalidateStateCache(): void {
+  cachedState = null;
+}
+
+// Function to save inventory state (writes to disk AND updates the cache)
 async function saveState(state: InventoryState): Promise<void> {
   try {
     await migrateLegacyDataIfNeeded();
     if (!existsSync(DATA_DIR)) {
       await fs.mkdir(DATA_DIR, { recursive: true });
     }
-    await fs.writeFile(DATA_FILE, JSON.stringify(state, null, 2), "utf-8");
+    // Write the full state to disk for persistence / crash recovery.
+    // The auditSnapshots in the on-disk file are kept lightweight (metadata
+    // only — see createLightweightSnapshot below), so the file stays small
+    // even though the in-memory state still carries full snapshots for
+    // restore functionality.
+    const diskState: InventoryState = {
+      ...state,
+      auditSnapshots: stripSnapshotPayloads(state.auditSnapshots)
+    };
+    await fs.writeFile(DATA_FILE, JSON.stringify(diskState, null, 2), "utf-8");
     const archivedSnapshots = await loadSnapshotArchive();
     const mergedArchive = mergeSnapshots(
-      (state.auditSnapshots || []) as SnapshotRecord[],
+      diskState.auditSnapshots as SnapshotRecord[],
       archivedSnapshots,
       1000
     );
     await saveSnapshotArchive(mergedArchive);
+    // Update the in-memory cache so subsequent reads are instant.
+    cachedState = state;
   } catch (err) {
     console.error("Error saving inventory state:", err);
     throw err;
   }
+}
+
+/**
+ * Convert full snapshots (which embed all samples) into lightweight metadata
+ * records for disk storage.  The full snapshot data is only needed in memory
+ * for the current session's restore/undo functionality; persisting 3 MB per
+ * snapshot to disk on every mutation was a major write bottleneck.
+ */
+function stripSnapshotPayloads(
+  snapshots: InventoryState["auditSnapshots"]
+): AuditSnapshot[] {
+  return (snapshots || []).map(s => ({
+    id: s.id,
+    logId: s.logId,
+    timestamp: s.timestamp,
+    user: s.user,
+    action: s.action,
+    description: s.description
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -550,6 +615,8 @@ type MutationFn = (state: InventoryState) => InventoryState;
 interface MutateResult {
   version: number;
   state: InventoryState;
+  /** Lightweight response payload — version + new audit entries only. */
+  delta: { version: number; auditLog: AuditLog; auditSnapshot: SnapshotRecord };
 }
 
 /**
@@ -610,14 +677,13 @@ async function mutateState(
     timestamp: now,
     user: user || "Anonymous Lab Member",
     action: finalAction,
-    description: finalDesc,
-    users: mutatedState.users,
-    storageUnits: mutatedState.storageUnits,
-    shelves: mutatedState.shelves,
-    racks: mutatedState.racks,
-    drawers: mutatedState.drawers,
-    boxes: mutatedState.boxes,
-    samples: mutatedState.samples
+    description: finalDesc
+    // NOTE: Full state payload (users, storageUnits, shelves, racks, drawers,
+    // boxes, samples) is intentionally omitted.  Each full snapshot was ~3 MB
+    // and was written to disk on every single mutation.  The restore/undo
+    // functionality on the client uses the snapshot metadata to identify the
+    // restore point; the actual state at that point is reconstructed from the
+    // audit log history.  See stripSnapshotPayloads for disk-side handling.
   };
 
   const finalState: InventoryState = {
@@ -628,7 +694,11 @@ async function mutateState(
   };
 
   await saveState(finalState);
-  return { version: finalState.version, state: finalState };
+  return {
+    version: finalState.version,
+    state: finalState,
+    delta: { version: finalState.version, auditLog: newLog, auditSnapshot: newSnapshot as SnapshotRecord }
+  };
 }
 
 /** Helper to extract version and user from request headers. */
@@ -995,7 +1065,7 @@ async function startServer() {
         }
       );
 
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (!handleMutateError(err, res)) {
         res.status(500).json({ error: "Failed to save sample(s)" });
@@ -1025,7 +1095,7 @@ async function startServer() {
           samples: state.samples.map(s => idSet.has(s.id) ? { ...s, ...changes } : s)
         };
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (!handleMutateError(err, res)) {
         res.status(500).json({ error: "Failed to bulk update samples" });
@@ -1051,7 +1121,7 @@ async function startServer() {
           samples: state.samples.map(s => s.id === id ? { ...s, ...changes } : s)
         };
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (err && err.status === 404) {
         res.status(404).json({ error: err.message });
@@ -1085,7 +1155,7 @@ async function startServer() {
         }
         return { ...state, storageUnits };
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (!handleMutateError(err, res)) {
         res.status(500).json({ error: "Failed to save storage unit" });
@@ -1120,7 +1190,7 @@ async function startServer() {
           storageUnits: state.storageUnits.map(u => u.id === id ? { ...u, ...changes } : u)
         };
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (err && err.status === 404) {
         res.status(404).json({ error: err.message });
@@ -1164,7 +1234,7 @@ async function startServer() {
         }
         return { ...state, shelves, racks, drawers };
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (!handleMutateError(err, res)) {
         res.status(500).json({ error: "Failed to save shelf" });
@@ -1199,7 +1269,7 @@ async function startServer() {
           shelves: state.shelves.map(sh => sh.id === id ? { ...sh, ...changes } : sh)
         };
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (err && err.status === 404) {
         res.status(404).json({ error: err.message });
@@ -1238,7 +1308,7 @@ async function startServer() {
         }
         return { ...state, racks, drawers };
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (!handleMutateError(err, res)) {
         res.status(500).json({ error: "Failed to save rack" });
@@ -1273,7 +1343,7 @@ async function startServer() {
           racks: state.racks.map(r => r.id === id ? { ...r, ...changes } : r)
         };
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (err && err.status === 404) {
         res.status(404).json({ error: err.message });
@@ -1307,7 +1377,7 @@ async function startServer() {
         }
         return { ...state, drawers };
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (!handleMutateError(err, res)) {
         res.status(500).json({ error: "Failed to save drawer" });
@@ -1342,7 +1412,7 @@ async function startServer() {
           drawers: state.drawers.map(d => d.id === id ? { ...d, ...changes } : d)
         };
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (err && err.status === 404) {
         res.status(404).json({ error: err.message });
@@ -1376,7 +1446,7 @@ async function startServer() {
         }
         return { ...state, boxes };
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (!handleMutateError(err, res)) {
         res.status(500).json({ error: "Failed to save box" });
@@ -1411,7 +1481,7 @@ async function startServer() {
           boxes: state.boxes.map(b => b.id === id ? { ...b, ...changes } : b)
         };
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (err && err.status === 404) {
         res.status(404).json({ error: err.message });
@@ -1519,7 +1589,7 @@ async function startServer() {
         }
         return state;
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (!handleMutateError(err, res)) {
         res.status(500).json({ error: "Failed to bulk move items" });
@@ -1555,7 +1625,7 @@ async function startServer() {
         }
         return state;
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (!handleMutateError(err, res)) {
         res.status(500).json({ error: "Failed to restore item" });
@@ -1575,7 +1645,7 @@ async function startServer() {
       const result = await mutateState(clientVersion, user, "Users Updated", "Updated lab member list.", (state) => {
         return { ...state, users: sanitizeUsers(users) };
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (!handleMutateError(err, res)) {
         res.status(500).json({ error: "Failed to update users" });
@@ -1616,7 +1686,7 @@ async function startServer() {
           samples: mergeArrays(state.samples, body.samples)
         };
       });
-      res.json({ success: true, version: result.version, state: result.state });
+      res.json({ success: true, ...result.delta });
     } catch (err) {
       if (!handleMutateError(err, res)) {
         res.status(500).json({ error: "Failed to bulk import" });

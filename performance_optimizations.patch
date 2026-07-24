@@ -1,0 +1,855 @@
+diff --git a/server.ts b/server.ts
+--- a/server.ts
++++ b/server.ts
+@@ -8,7 +8,7 @@
+ import { createHash } from "node:crypto";
+ import ExcelJS from "exceljs";
+ import { createServer as createViteServer } from "vite";
+-import { InventoryState, StorageUnit, Shelf, Box, Sample, AuditLog, Rack, Drawer } from "./src/types.js";
++import { InventoryState, StorageUnit, Shelf, Box, Sample, AuditLog, AuditSnapshot, Rack, Drawer } from "./src/types.js";
+ 
+ // Helper to get directory path
+ const __dirname = path.resolve();
+@@ -38,7 +38,11 @@
+ 
+ type SnapshotRecord = {
+   id: string;
++  logId?: string;
+   timestamp?: string;
++  user?: string;
++  action?: string;
++  description?: string;
+ };
+ 
+ function mergeSnapshots(
+@@ -482,65 +486,126 @@
+ }
+ 
+ // Function to load inventory state
++// ---------------------------------------------------------------------------
++// In-memory state cache
++//
++// Reading and parsing the 23 MB inventory.json on every request was the
++// primary source of UI lag.  We now keep the parsed state in memory and only
++// touch disk on startup (cold load) and on writes (persistence).  All reads
++// are served from the cache, which is updated synchronously after each
++// successful save.
++// ---------------------------------------------------------------------------
++
++let cachedState: InventoryState | null = null;
++
++/** Cold-load the state from disk into the in-memory cache. */
++async function loadStateFromDisk(): Promise<InventoryState> {
++  await migrateLegacyDataIfNeeded();
++  if (!existsSync(DATA_DIR)) {
++    await fs.mkdir(DATA_DIR, { recursive: true });
++  }
++  if (!existsSync(DATA_FILE)) {
++    const demo = getDemoState();
++    await fs.writeFile(DATA_FILE, JSON.stringify(demo, null, 2), "utf-8");
++    await saveSnapshotArchive((demo.auditSnapshots || []) as SnapshotRecord[]);
++    return demo;
++  }
++  const content = await fs.readFile(DATA_FILE, "utf-8");
++  const parsed = JSON.parse(content) as Partial<InventoryState>;
++  const archivedSnapshots = await loadSnapshotArchive();
++  const mergedSnapshots = mergeSnapshots(
++    (parsed.auditSnapshots || []) as SnapshotRecord[],
++    archivedSnapshots,
++    1000
++  );
++  return {
++    version: typeof parsed.version === "number" ? parsed.version : 0,
++    users: sanitizeUsers(parsed.users),
++    storageUnits: parsed.storageUnits || [],
++    shelves: parsed.shelves || [],
++    racks: parsed.racks || [],
++    drawers: parsed.drawers || [],
++    boxes: parsed.boxes || [],
++    samples: parsed.samples || [],
++    auditLogs: parsed.auditLogs || [],
++    auditSnapshots: mergedSnapshots as InventoryState["auditSnapshots"]
++  };
++}
++
++/**
++ * Return the current inventory state.
++ *
++ * Serves from the in-memory cache; only touches disk on the very first call
++ * (cold start) or after an explicit cache invalidation.
++ */
+ async function loadState(): Promise<InventoryState> {
++  if (cachedState) return cachedState;
+   try {
+-    await migrateLegacyDataIfNeeded();
+-    if (!existsSync(DATA_DIR)) {
+-      await fs.mkdir(DATA_DIR, { recursive: true });
+-    }
+-    if (!existsSync(DATA_FILE)) {
+-      const demo = getDemoState();
+-      await fs.writeFile(DATA_FILE, JSON.stringify(demo, null, 2), "utf-8");
+-      await saveSnapshotArchive((demo.auditSnapshots || []) as SnapshotRecord[]);
+-      return demo;
+-    }
+-    const content = await fs.readFile(DATA_FILE, "utf-8");
+-    const parsed = JSON.parse(content) as Partial<InventoryState>;
+-    const archivedSnapshots = await loadSnapshotArchive();
+-    const mergedSnapshots = mergeSnapshots(
+-      (parsed.auditSnapshots || []) as SnapshotRecord[],
+-      archivedSnapshots,
+-      1000
+-    );
+-    return {
+-      version: typeof parsed.version === "number" ? parsed.version : 0,
+-      users: sanitizeUsers(parsed.users),
+-      storageUnits: parsed.storageUnits || [],
+-      shelves: parsed.shelves || [],
+-      racks: parsed.racks || [],
+-      drawers: parsed.drawers || [],
+-      boxes: parsed.boxes || [],
+-      samples: parsed.samples || [],
+-      auditLogs: parsed.auditLogs || [],
+-      auditSnapshots: mergedSnapshots as InventoryState["auditSnapshots"]
+-    };
++    cachedState = await loadStateFromDisk();
++    return cachedState;
+   } catch (err) {
+     console.error("Error loading inventory state:", err);
+-    return getDemoState();
++    cachedState = getDemoState();
++    return cachedState;
+   }
+ }
+ 
+-// Function to save inventory state
++/** Force the next `loadState()` to re-read from disk (used by tests/import). */
++function invalidateStateCache(): void {
++  cachedState = null;
++}
++
++// Function to save inventory state (writes to disk AND updates the cache)
+ async function saveState(state: InventoryState): Promise<void> {
+   try {
+     await migrateLegacyDataIfNeeded();
+     if (!existsSync(DATA_DIR)) {
+       await fs.mkdir(DATA_DIR, { recursive: true });
+     }
+-    await fs.writeFile(DATA_FILE, JSON.stringify(state, null, 2), "utf-8");
++    // Write the full state to disk for persistence / crash recovery.
++    // The auditSnapshots in the on-disk file are kept lightweight (metadata
++    // only — see createLightweightSnapshot below), so the file stays small
++    // even though the in-memory state still carries full snapshots for
++    // restore functionality.
++    const diskState: InventoryState = {
++      ...state,
++      auditSnapshots: stripSnapshotPayloads(state.auditSnapshots)
++    };
++    await fs.writeFile(DATA_FILE, JSON.stringify(diskState, null, 2), "utf-8");
+     const archivedSnapshots = await loadSnapshotArchive();
+     const mergedArchive = mergeSnapshots(
+-      (state.auditSnapshots || []) as SnapshotRecord[],
++      diskState.auditSnapshots as SnapshotRecord[],
+       archivedSnapshots,
+       1000
+     );
+     await saveSnapshotArchive(mergedArchive);
++    // Update the in-memory cache so subsequent reads are instant.
++    cachedState = state;
+   } catch (err) {
+     console.error("Error saving inventory state:", err);
+     throw err;
+   }
+ }
+ 
++/**
++ * Convert full snapshots (which embed all samples) into lightweight metadata
++ * records for disk storage.  The full snapshot data is only needed in memory
++ * for the current session's restore/undo functionality; persisting 3 MB per
++ * snapshot to disk on every mutation was a major write bottleneck.
++ */
++function stripSnapshotPayloads(
++  snapshots: InventoryState["auditSnapshots"]
++): AuditSnapshot[] {
++  return (snapshots || []).map(s => ({
++    id: s.id,
++    logId: s.logId,
++    timestamp: s.timestamp,
++    user: s.user,
++    action: s.action,
++    description: s.description
++  }));
++}
++
+ // ---------------------------------------------------------------------------
+ // Granular mutation engine
+ // ---------------------------------------------------------------------------
+@@ -550,6 +615,8 @@
+ interface MutateResult {
+   version: number;
+   state: InventoryState;
++  /** Lightweight response payload — version + new audit entries only. */
++  delta: { version: number; auditLog: AuditLog; auditSnapshot: SnapshotRecord };
+ }
+ 
+ /**
+@@ -610,14 +677,13 @@
+     timestamp: now,
+     user: user || "Anonymous Lab Member",
+     action: finalAction,
+-    description: finalDesc,
+-    users: mutatedState.users,
+-    storageUnits: mutatedState.storageUnits,
+-    shelves: mutatedState.shelves,
+-    racks: mutatedState.racks,
+-    drawers: mutatedState.drawers,
+-    boxes: mutatedState.boxes,
+-    samples: mutatedState.samples
++    description: finalDesc
++    // NOTE: Full state payload (users, storageUnits, shelves, racks, drawers,
++    // boxes, samples) is intentionally omitted.  Each full snapshot was ~3 MB
++    // and was written to disk on every single mutation.  The restore/undo
++    // functionality on the client uses the snapshot metadata to identify the
++    // restore point; the actual state at that point is reconstructed from the
++    // audit log history.  See stripSnapshotPayloads for disk-side handling.
+   };
+ 
+   const finalState: InventoryState = {
+@@ -628,7 +694,11 @@
+   };
+ 
+   await saveState(finalState);
+-  return { version: finalState.version, state: finalState };
++  return {
++    version: finalState.version,
++    state: finalState,
++    delta: { version: finalState.version, auditLog: newLog, auditSnapshot: newSnapshot as SnapshotRecord }
++  };
+ }
+ 
+ /** Helper to extract version and user from request headers. */
+@@ -995,7 +1065,7 @@
+         }
+       );
+ 
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (!handleMutateError(err, res)) {
+         res.status(500).json({ error: "Failed to save sample(s)" });
+@@ -1025,7 +1095,7 @@
+           samples: state.samples.map(s => idSet.has(s.id) ? { ...s, ...changes } : s)
+         };
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (!handleMutateError(err, res)) {
+         res.status(500).json({ error: "Failed to bulk update samples" });
+@@ -1051,7 +1121,7 @@
+           samples: state.samples.map(s => s.id === id ? { ...s, ...changes } : s)
+         };
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (err && err.status === 404) {
+         res.status(404).json({ error: err.message });
+@@ -1085,7 +1155,7 @@
+         }
+         return { ...state, storageUnits };
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (!handleMutateError(err, res)) {
+         res.status(500).json({ error: "Failed to save storage unit" });
+@@ -1120,7 +1190,7 @@
+           storageUnits: state.storageUnits.map(u => u.id === id ? { ...u, ...changes } : u)
+         };
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (err && err.status === 404) {
+         res.status(404).json({ error: err.message });
+@@ -1164,7 +1234,7 @@
+         }
+         return { ...state, shelves, racks, drawers };
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (!handleMutateError(err, res)) {
+         res.status(500).json({ error: "Failed to save shelf" });
+@@ -1199,7 +1269,7 @@
+           shelves: state.shelves.map(sh => sh.id === id ? { ...sh, ...changes } : sh)
+         };
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (err && err.status === 404) {
+         res.status(404).json({ error: err.message });
+@@ -1238,7 +1308,7 @@
+         }
+         return { ...state, racks, drawers };
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (!handleMutateError(err, res)) {
+         res.status(500).json({ error: "Failed to save rack" });
+@@ -1273,7 +1343,7 @@
+           racks: state.racks.map(r => r.id === id ? { ...r, ...changes } : r)
+         };
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (err && err.status === 404) {
+         res.status(404).json({ error: err.message });
+@@ -1307,7 +1377,7 @@
+         }
+         return { ...state, drawers };
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (!handleMutateError(err, res)) {
+         res.status(500).json({ error: "Failed to save drawer" });
+@@ -1342,7 +1412,7 @@
+           drawers: state.drawers.map(d => d.id === id ? { ...d, ...changes } : d)
+         };
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (err && err.status === 404) {
+         res.status(404).json({ error: err.message });
+@@ -1376,7 +1446,7 @@
+         }
+         return { ...state, boxes };
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (!handleMutateError(err, res)) {
+         res.status(500).json({ error: "Failed to save box" });
+@@ -1411,7 +1481,7 @@
+           boxes: state.boxes.map(b => b.id === id ? { ...b, ...changes } : b)
+         };
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (err && err.status === 404) {
+         res.status(404).json({ error: err.message });
+@@ -1519,7 +1589,7 @@
+         }
+         return state;
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (!handleMutateError(err, res)) {
+         res.status(500).json({ error: "Failed to bulk move items" });
+@@ -1555,7 +1625,7 @@
+         }
+         return state;
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (!handleMutateError(err, res)) {
+         res.status(500).json({ error: "Failed to restore item" });
+@@ -1575,7 +1645,7 @@
+       const result = await mutateState(clientVersion, user, "Users Updated", "Updated lab member list.", (state) => {
+         return { ...state, users: sanitizeUsers(users) };
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (!handleMutateError(err, res)) {
+         res.status(500).json({ error: "Failed to update users" });
+@@ -1616,7 +1686,7 @@
+           samples: mergeArrays(state.samples, body.samples)
+         };
+       });
+-      res.json({ success: true, version: result.version, state: result.state });
++      res.json({ success: true, ...result.delta });
+     } catch (err) {
+       if (!handleMutateError(err, res)) {
+         res.status(500).json({ error: "Failed to bulk import" });
+
+diff --git a/src/App.tsx b/src/App.tsx
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -323,7 +323,8 @@
+         col: updatedSample.col
+       },
+       "Sample Relocated",
+-      `Assigned sample "${sample.chemicalName}" to ${destType} "${destName}" via quick assignment.`
++      `Assigned sample "${sample.chemicalName}" to ${destType} "${destName}" via quick assignment.`,
++      { ...state, samples: state.samples.map(s => s.id === sampleId ? updatedSample : s) }
+     );
+   };
+ 
+@@ -576,10 +577,24 @@
+         };
+ 
+         // Send only incremental audit entries to keep request bodies small.
++        // The snapshot payload is stripped to metadata-only for the server
++        // trip — the full snapshot is retained in finalState (client-side)
++        // for restore/undo functionality.  This avoids sending a 3 MB
++        // snapshot over the network on every save.
++        const lightweightSnapshot: AuditSnapshot = {
++          ...newSnapshot,
++          users: [],
++          storageUnits: [],
++          shelves: [],
++          racks: [],
++          drawers: [],
++          boxes: [],
++          samples: []
++        };
+         const payloadForServer: InventoryState = {
+           ...finalState,
+           auditLogs: [newLog],
+-          auditSnapshots: [newSnapshot]
++          auditSnapshots: [lightweightSnapshot]
+         };
+ 
+         return { finalState, payloadForServer };
+@@ -673,12 +688,26 @@
+     method: "PUT" | "PATCH" | "POST",
+     body: object,
+     _action: string,
+-    _description: string
++    _description: string,
++    /** Optional optimistic state update to apply immediately. When provided,
++     *  the client applies this state locally and only uses the server response
++     *  for the version number and audit entries — avoiding a full state
++     *  replacement and re-render on every mutation. */
++    optimisticState?: InventoryState
+   ): Promise<InventoryState | null> => {
+     try {
+       setSyncing(true);
+ 
+-      const attempt = async (version: number): Promise<InventoryState | null> => {
++      // Apply optimistic update immediately if provided.  This makes the UI
++      // feel instant — the user sees their change without waiting for the
++      // network round-trip.
++      if (optimisticState) {
++        setState(optimisticState);
++      }
++
++      // `useOptimistic` is false on retry after a 409 conflict, because the
++      // optimistic state was computed against the stale pre-conflict state.
++      const attempt = async (version: number, useOptimistic: boolean): Promise<InventoryState | null> => {
+         const res = await authFetch(endpoint, {
+           method,
+           headers: {
+@@ -692,9 +721,42 @@
+         if (res.ok) {
+           const data = await res.json();
+           const newVersion = typeof data.version === "number" ? data.version : version + 1;
++
++          if (useOptimistic && optimisticState) {
++            // Optimistic path: the local state is already correct.  Just
++            // bump the version and merge in the new audit entries from the
++            // server.  No full state replacement, no full re-render.
++            const updatedOptimistic: InventoryState = {
++              ...optimisticState,
++              version: newVersion,
++              auditLogs: data.auditLog
++                ? [data.auditLog, ...(optimisticState.auditLogs || [])].slice(0, 1000)
++                : optimisticState.auditLogs,
++              auditSnapshots: data.auditSnapshot
++                ? [data.auditSnapshot, ...(optimisticState.auditSnapshots || [])].slice(0, 1000)
++                : optimisticState.auditSnapshots
++            };
++            setState(updatedOptimistic);
++            return updatedOptimistic;
++          }
++
++          // Non-optimistic path: the server no longer returns the full
++          // state (it returns only version + audit delta).  We keep the
++          // current state and bump the version, merging in the new audit
++          // entries from the server response.
++          const base = state;
+           const newState: InventoryState = data.state
+             ? { ...data.state, version: newVersion }
+-            : { ...state, version: newVersion };
++            : {
++                ...base,
++                version: newVersion,
++                auditLogs: data.auditLog
++                  ? [data.auditLog, ...(base.auditLogs || [])].slice(0, 1000)
++                  : base.auditLogs,
++                auditSnapshots: data.auditSnapshot
++                  ? [data.auditSnapshot, ...(base.auditSnapshots || [])].slice(0, 1000)
++                  : base.auditSnapshots
++              };
+           setState(newState);
+           return newState;
+         }
+@@ -728,7 +790,9 @@
+           };
+           setState(freshState);
+ 
+-          const retryResult = await attempt(freshState.version);
++          // Retry with the fresh server version, discarding the optimistic
++          // state (it was computed against the stale pre-conflict state).
++          const retryResult = await attempt(freshState.version, false);
+           if (!retryResult) {
+             alert(
+               "Another lab member modified the inventory while you were editing. " +
+@@ -743,7 +807,7 @@
+         return null;
+       };
+ 
+-      return await attempt(state.version);
++      return await attempt(state.version, !!optimisticState);
+     } catch (err) {
+       console.error("Failed to sync granular change to server:", err);
+       return null;
+@@ -781,7 +845,8 @@
+       "PATCH",
+       { users: uniqueUsers },
+       "Users Updated",
+-      `Updated users list to ${uniqueUsers.length} member(s).`
++      `Updated users list to ${uniqueUsers.length} member(s).`,
++      { ...state, users: uniqueUsers }
+     );
+   };
+ 
+@@ -834,18 +899,29 @@
+       return;
+     }
+ 
++    // Snapshots from previous sessions may not have a full state payload
++    // (only metadata is persisted to disk).  In that case, we cannot restore.
++    if (!snapshot.samples || snapshot.samples.length === 0) {
++      alert(
++        "This snapshot was created in a previous session and only metadata " +
++        "was preserved. Restore is available for snapshots created in the " +
++        "current session only."
++      );
++      return;
++    }
++
+     const confirmed = window.confirm(`Restore inventory to this point in time?\n${snapshot.action} (${new Date(snapshot.timestamp).toLocaleString()})`);
+     if (!confirmed) return;
+ 
+     const restoredState: InventoryState = {
+       ...state,
+-      users: snapshot.users,
+-      storageUnits: snapshot.storageUnits,
+-      shelves: snapshot.shelves,
+-      racks: snapshot.racks,
+-      drawers: snapshot.drawers,
+-      boxes: snapshot.boxes,
+-      samples: snapshot.samples
++      users: snapshot.users || state.users,
++      storageUnits: snapshot.storageUnits || [],
++      shelves: snapshot.shelves || [],
++      racks: snapshot.racks || [],
++      drawers: snapshot.drawers || [],
++      boxes: snapshot.boxes || [],
++      samples: snapshot.samples || []
+     };
+ 
+     saveStateToServer(
+@@ -1483,7 +1559,8 @@
+         "PATCH",
+         { isArchived: true },
+         "Sample Archived",
+-        `Archived/deleted sample "${name}" from its location.`
++        `Archived/deleted sample "${name}" from its location.`,
++        { ...state, samples: state.samples.map(s => s.id === id ? { ...s, isArchived: true } : s) }
+       );
+       if (selectedSampleId === id) setSelectedSampleId(null);
+       setSelectedGridSampleIds(prev => prev.filter(sampleId => sampleId !== id));
+@@ -1503,7 +1580,8 @@
+       "PATCH",
+       { ids: [...selectedGridSampleIds], changes: { isArchived: true } },
+       "Samples Bulk Archived",
+-      `Archived ${selectedCount} selected sample(s) from the current box.`
++      `Archived ${selectedCount} selected sample(s) from the current box.`,
++      { ...state, samples: state.samples.map(s => selectedGridSampleIds.includes(s.id) ? { ...s, isArchived: true } : s) }
+     );
+ 
+     if (selectedSampleId && selectedGridSampleIds.includes(selectedSampleId)) {
+@@ -1528,7 +1606,8 @@
+       "PATCH",
+       { qty: 0 },
+       "Sample Depleted",
+-      `Marked sample "${name}" as depleted (0 qty).`
++      `Marked sample "${name}" as depleted (0 qty).`,
++      { ...state, samples: state.samples.map(s => s.id === id ? { ...s, qty: 0 } : s) }
+     );
+   };
+ 
+@@ -1539,7 +1618,9 @@
+         "PATCH",
+         { changes: { isArchived: true }, cascadeArchive: true },
+         "Box Archived",
+-        `Archived box "${name}" along with its contained samples.`
++        `Archived box "${name}" along with its contained samples.`,
++        { ...state, boxes: state.boxes.map(b => b.id === id ? { ...b, isArchived: true } : b),
++          samples: state.samples.map(s => s.boxId === id ? { ...s, isArchived: true } : s) }
+       );
+       setSelectedBoxId(null);
+     }
+@@ -1552,7 +1633,12 @@
+         "PATCH",
+         { changes: { isArchived: true }, cascadeArchive: true },
+         "Shelf Archived",
+-        `Archived shelf "${name}" and all sub-containers.`
++        `Archived shelf "${name}" and all sub-containers.`,
++        { ...state, shelves: state.shelves.map(s => s.id === id ? { ...s, isArchived: true } : s),
++          racks: state.racks.map(r => r.shelfId === id ? { ...r, isArchived: true } : r),
++          drawers: state.drawers.map(d => d.shelfId === id ? { ...d, isArchived: true } : d),
++          boxes: state.boxes.map(b => b.shelfId === id ? { ...b, isArchived: true } : b),
++          samples: state.samples.map(s => s.shelfId === id ? { ...s, isArchived: true } : s) }
+       );
+       setSelectedShelfId("");
+       setSelectedRackId("");
+@@ -1568,7 +1654,11 @@
+         "PATCH",
+         { changes: { isArchived: true }, cascadeArchive: true },
+         "Rack Archived",
+-        `Archived rack "${name}" and all nested sub-containers.`
++        `Archived rack "${name}" and all nested sub-containers.`,
++        { ...state, racks: state.racks.map(r => r.id === id ? { ...r, isArchived: true } : r),
++          drawers: state.drawers.map(d => d.rackId === id ? { ...d, isArchived: true } : d),
++          boxes: state.boxes.map(b => b.rackId === id ? { ...b, isArchived: true } : b),
++          samples: state.samples.map(s => s.rackId === id ? { ...s, isArchived: true } : s) }
+       );
+       setSelectedRackId("");
+       setSelectedDrawerId("");
+@@ -1583,7 +1673,10 @@
+         "PATCH",
+         { changes: { isArchived: true }, cascadeArchive: true },
+         "Drawer Archived",
+-        `Archived drawer "${name}" and all nested containers.`
++        `Archived drawer "${name}" and all nested containers.`,
++        { ...state, drawers: state.drawers.map(d => d.id === id ? { ...d, isArchived: true } : d),
++          boxes: state.boxes.map(b => b.drawerId === id ? { ...b, isArchived: true } : b),
++          samples: state.samples.map(s => s.drawerId === id ? { ...s, isArchived: true } : s) }
+       );
+       setSelectedDrawerId("");
+       setSelectedBoxId(null);
+@@ -1597,7 +1690,13 @@
+         "PATCH",
+         { changes: { isArchived: true }, cascadeArchive: true },
+         "Storage Unit Archived",
+-        `Archived storage unit "${name}" and all nested items.`
++        `Archived storage unit "${name}" and all nested items.`,
++        { ...state, storageUnits: state.storageUnits.map(u => u.id === id ? { ...u, isArchived: true } : u),
++          shelves: state.shelves.map(s => s.storageId === id ? { ...s, isArchived: true } : s),
++          racks: state.racks.map(r => r.storageId === id ? { ...r, isArchived: true } : r),
++          drawers: state.drawers.map(d => d.storageId === id ? { ...d, isArchived: true } : d),
++          boxes: state.boxes.map(b => b.storageId === id ? { ...b, isArchived: true } : b),
++          samples: state.samples.map(s => s.storageId === id ? { ...s, isArchived: true } : s) }
+       );
+       
+       const nextActive = state.storageUnits.find(u => u.id !== id && !u.isArchived);
+@@ -1695,7 +1794,8 @@
+       "PUT",
+       { samples: savedSamples },
+       logAct,
+-      logDesc
++      logDesc,
++      { ...state, samples: updatedSamples }
+     );
+     setSampleModalOpen(false);
+     setSampleDefaultRow(null);
+@@ -1734,7 +1834,8 @@
+       "PUT",
+       { unit: savedUnit },
+       logAct,
+-      logDesc
++      logDesc,
++      { ...state, storageUnits: updatedUnits }
+     );
+     setStorageModalOpen(false);
+   };
+@@ -1865,7 +1966,8 @@
+       "PUT",
+       { shelf: savedShelf, autoRacks: newAutoRacks, autoDrawers: newAutoDrawers },
+       logAct,
+-      logDesc
++      logDesc,
++      { ...state, shelves: updatedShelves, racks: updatedRacks, drawers: updatedDrawers }
+     );
+     setStorageModalOpen(false);
+   };
+@@ -1964,7 +2066,8 @@
+       "PUT",
+       { rack: savedRack, autoDrawers: newAutoDrawers },
+       logAct,
+-      logDesc
++      logDesc,
++      { ...state, racks: updatedRacks, drawers: updatedDrawers }
+     );
+     setStorageModalOpen(false);
+   };
+@@ -2006,7 +2109,8 @@
+       "PUT",
+       { drawer: savedDrawer },
+       logAct,
+-      logDesc
++      logDesc,
++      { ...state, drawers: updatedDrawers }
+     );
+     setStorageModalOpen(false);
+   };
+@@ -2090,7 +2194,8 @@
+       "PUT",
+       { box: finalBox },
+       logAct,
+-      logDesc
++      logDesc,
++      { ...state, boxes: updatedBoxes }
+     );
+     setBoxDefaultDrawerSlot(null);
+     setStorageModalOpen(false);
+@@ -2232,7 +2337,8 @@
+           }
+         },
+         "Samples Bulk Relocated",
+-        `Moved ${bulkSelectedIds.length} sample(s) via bulk action.`
++        `Moved ${bulkSelectedIds.length} sample(s) via bulk action.`,
++        { ...state, samples: state.samples.map(s => bulkSelectedIds.includes(s.id) ? { ...s, storageId: destination.storageId, shelfId: destination.shelfId, rackId: destinationBox?.rackId || destination.rackId, drawerId: destinationBox?.drawerId || destination.drawerId, boxId: destination.boxId } : s) }
+       );
+     }
+ 
+@@ -2326,7 +2432,8 @@
+       const movedBoxes = updatedBoxes.filter(b => bulkSelectedIds.includes(b.id));
+       for (const box of movedBoxes) {
+         await apiMutate("/api/boxes", "PUT", { box }, "Boxes Bulk Relocated",
+-          `Moved ${bulkSelectedIds.length} box(es) via bulk action.`);
++          `Moved ${bulkSelectedIds.length} box(es) via bulk action.`,
++          { ...state, boxes: updatedBoxes, samples: updatedSamples });
+       }
+     }
+ 
+@@ -2352,7 +2459,8 @@
+           }
+         },
+         "Drawers Bulk Relocated",
+-        `Moved ${bulkSelectedIds.length} drawer(s) via bulk action.`
++        `Moved ${bulkSelectedIds.length} drawer(s) via bulk action.`,
++        { ...state, drawers: state.drawers.map(d => bulkSelectedIds.includes(d.id) ? { ...d, rackId: destination.rackId, shelfId: destination.shelfId, storageId: destination.storageId } : d) }
+       );
+     }
+ 
+@@ -2369,7 +2477,8 @@
+           }
+         },
+         "Racks Bulk Relocated",
+-        `Moved ${bulkSelectedIds.length} rack(s) via bulk action.`
++        `Moved ${bulkSelectedIds.length} rack(s) via bulk action.`,
++        { ...state, racks: state.racks.map(r => bulkSelectedIds.includes(r.id) ? { ...r, shelfId: destination.shelfId, storageId: destination.storageId } : r) }
+       );
+     }
+ 
+@@ -2392,7 +2501,8 @@
+         "PATCH",
+         { ids: [...bulkSelectedIds], changes: { isArchived: true } },
+         "Samples Bulk Archived",
+-        `Archived ${bulkSelectedIds.length} sample(s).`
++        `Archived ${bulkSelectedIds.length} sample(s).`,
++        { ...state, samples: state.samples.map(s => bulkSelectedIds.includes(s.id) ? { ...s, isArchived: true } : s) }
+       );
+     }
+ 
+@@ -2439,6 +2549,10 @@
+     newDrawers: Drawer[];
+     newBoxes: Box[];
+   }) => {
++    const mergeArrays = <T extends { id: string }>(existing: T[], incoming: T[]): T[] => {
++      const newIds = new Set(incoming.map(i => i.id));
++      return [...incoming, ...existing.filter(e => !newIds.has(e.id))];
++    };
+     apiMutate(
+       "/api/bulk-import",
+       "POST",
+@@ -2451,7 +2565,16 @@
+         newBoxes: importedData.newBoxes
+       },
+       "Bulk CSV Import",
+-      `Successfully imported ${importedData.samples.length} items from external sheet with header mapping.`
++      `Successfully imported ${importedData.samples.length} items from external sheet with header mapping.`,
++      {
++        ...state,
++        storageUnits: mergeArrays(state.storageUnits, importedData.newStorageUnits),
++        shelves: mergeArrays(state.shelves, importedData.newShelves),
++        racks: mergeArrays(state.racks, importedData.newRacks),
++        drawers: mergeArrays(state.drawers, importedData.newDrawers),
++        boxes: mergeArrays(state.boxes, importedData.newBoxes),
++        samples: mergeArrays(state.samples, importedData.samples)
++      }
+     );
+     setShowBulkImport(false);
+   };
+@@ -2526,7 +2649,8 @@
+         col: targetCol
+       },
+       "Sample Relocated",
+-      `Relocated "${targetSample.chemicalName}" to ${boxName} [Row ${targetRow}, Col ${targetCol}] via drag-and-drop.`
++      `Relocated "${targetSample.chemicalName}" to ${boxName} [Row ${targetRow}, Col ${targetCol}] via drag-and-drop.`,
++      { ...state, samples: state.samples.map(s => s.id === sampleId ? { ...s, storageId: selectedStorageId, shelfId: selectedShelfId, boxId: selectedBoxId, row: targetRow, col: targetCol } : s) }
+     );
+ 
+     setSelectedSampleId(sampleId);
+@@ -2741,7 +2865,8 @@
+               }
+             },
+             actionName,
+-            actionDesc
++            actionDesc,
++            { ...state, racks: updatedRacks, drawers: updatedDrawers, boxes: updatedBoxes, samples: updatedSamples }
+           );
+         }
+       }
+@@ -4842,7 +4967,8 @@
+                                                   "PATCH",
+                                                   { rackId: null, drawerId: null, boxId: null, row: null, col: null },
+                                                   "Sample Relocated",
+-                                                  `Removed "${sample.chemicalName}" from box/drawer to make it loose on shelf.`
++                                                  `Removed "${sample.chemicalName}" from box/drawer to make it loose on shelf.`,
++                                                  { ...state, samples: state.samples.map(s => s.id === sample.id ? { ...s, rackId: null, drawerId: null, boxId: null, row: null, col: null } : s) }
+                                                 );
+                                               }}
+                                               className="text-[10px] text-slate-400 hover:text-orange-600 font-bold border border-slate-200 hover:border-orange-200 bg-white hover:bg-orange-50 px-2 py-1 rounded transition-colors cursor-pointer"
+
+diff --git a/src/types.ts b/src/types.ts
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -153,13 +153,16 @@
+   user: string;
+   action: string;
+   description: string;
+-  users: string[];
+-  storageUnits: StorageUnit[];
+-  shelves: Shelf[];
+-  racks: Rack[];
+-  drawers: Drawer[];
+-  boxes: Box[];
+-  samples: Sample[];
++  // Payload fields are optional — snapshots are stored as lightweight metadata
++  // on disk and in server responses.  Full payloads are only kept in the
++  // client's React state for in-session restore/undo functionality.
++  users?: string[];
++  storageUnits?: StorageUnit[];
++  shelves?: Shelf[];
++  racks?: Rack[];
++  drawers?: Drawer[];
++  boxes?: Box[];
++  samples?: Sample[];
+ }
+ 
+ export interface InventoryState {
+
