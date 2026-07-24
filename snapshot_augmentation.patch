@@ -1,0 +1,70 @@
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -726,14 +726,31 @@
+             // Optimistic path: the local state is already correct.  Just
+             // bump the version and merge in the new audit entries from the
+             // server.  No full state replacement, no full re-render.
++            //
++            // The server returns a metadata-only auditSnapshot (no payload
++            // arrays) to keep the response small.  We augment it with the
++            // full state payload from the optimistic state so that
++            // restore/undo functionality works within the current session.
++            const fullSnapshot: AuditSnapshot | null = data.auditSnapshot
++              ? {
++                  ...data.auditSnapshot,
++                  users: [...(optimisticState.users || [])],
++                  storageUnits: [...(optimisticState.storageUnits || [])],
++                  shelves: [...(optimisticState.shelves || [])],
++                  racks: [...(optimisticState.racks || [])],
++                  drawers: [...(optimisticState.drawers || [])],
++                  boxes: [...(optimisticState.boxes || [])],
++                  samples: [...(optimisticState.samples || [])]
++                }
++              : null;
+             const updatedOptimistic: InventoryState = {
+               ...optimisticState,
+               version: newVersion,
+               auditLogs: data.auditLog
+                 ? [data.auditLog, ...(optimisticState.auditLogs || [])].slice(0, 1000)
+                 : optimisticState.auditLogs,
+-              auditSnapshots: data.auditSnapshot
+-                ? [data.auditSnapshot, ...(optimisticState.auditSnapshots || [])].slice(0, 1000)
++              auditSnapshots: fullSnapshot
++                ? [fullSnapshot, ...(optimisticState.auditSnapshots || [])].slice(0, 1000)
+                 : optimisticState.auditSnapshots
+             };
+             setState(updatedOptimistic);
+@@ -744,7 +761,22 @@
+           // state (it returns only version + audit delta).  We keep the
+           // current state and bump the version, merging in the new audit
+           // entries from the server response.
++          //
++          // Same augmentation as the optimistic path: fill in the payload
++          // arrays from the current state so restore/undo works.
+           const base = state;
++          const fullSnapshotNonOpt: AuditSnapshot | null = data.auditSnapshot
++            ? {
++                ...data.auditSnapshot,
++                users: [...(base.users || [])],
++                storageUnits: [...(base.storageUnits || [])],
++                shelves: [...(base.shelves || [])],
++                racks: [...(base.racks || [])],
++                drawers: [...(base.drawers || [])],
++                boxes: [...(base.boxes || [])],
++                samples: [...(base.samples || [])]
++              }
++            : null;
+           const newState: InventoryState = data.state
+             ? { ...data.state, version: newVersion }
+             : {
+@@ -753,8 +785,8 @@
+                 auditLogs: data.auditLog
+                   ? [data.auditLog, ...(base.auditLogs || [])].slice(0, 1000)
+                   : base.auditLogs,
+-                auditSnapshots: data.auditSnapshot
+-                  ? [data.auditSnapshot, ...(base.auditSnapshots || [])].slice(0, 1000)
++                auditSnapshots: fullSnapshotNonOpt
++                  ? [fullSnapshotNonOpt, ...(base.auditSnapshots || [])].slice(0, 1000)
+                   : base.auditSnapshots
+               };
+           setState(newState);
