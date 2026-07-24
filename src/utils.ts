@@ -4,7 +4,7 @@ import { Sample } from "./types.js";
  * Standard CSV Headers requested by user
  */
 export const ALL_CSV_HEADERS = [
-  "ChemicalID", "ChemicalName", "CAS Number", "Lab", "Qty", "Units", "Phase", "Rooom", 
+  "ChemicalID", "ChemicalName", "CAS Number", "Lab", "Qty", "Units", "Phase", "Room",
   "Location", "SubLocation", "Status", "Plasmid Name", "Primary Box", "Secondary Box", 
   "Primary Tube", "Secondary Tube", "Primary Date Deposited", "Secondary Date Deposited", 
   "Primary Deposited By", "Secondary Deposited By", "Primary Preparation/Concentration", 
@@ -14,7 +14,8 @@ export const ALL_CSV_HEADERS = [
   "Shelf Name", "Rack ID", "Rack Name", "Drawer ID", "Drawer Name", "Category ID", "Category Name", "Box ID", 
   "Box Name", "Item Group ID", "Item Group Name", "Item ID", "Item Name", "Row", "Column", 
   "Concentration", "Volume/Mass", "Expires On", "Created On", "Notes", "Catalog #", 
-  "Packaging", "Price", "Lot", "Item Type"
+  "Packaging", "Price", "Lot", "Item Type",
+  "GHS Hazard Codes", "SDS URL", "Storage Class", "Min Stock Level", "Reorder Qty"
 ];
 
 /**
@@ -104,7 +105,12 @@ export const HEADER_TO_FIELD_MAP: Record<string, keyof Sample> = {
   technicaldetails: "notes",
   expirationdate: "expiresOn",
   lotnumber: "lot",
-  alternatename: "chemicalName"
+  alternatename: "chemicalName",
+  ghshazardcodes: "ghsHazardCodes",
+  sdsurl: "sdsUrl",
+  storageclass: "storageClass",
+  minstocklevel: "minStockLevel",
+  reorderqty: "reorderQty"
 };
 
 /**
@@ -167,6 +173,8 @@ export function parseCSV(text: string): string[][] {
  */
 export function escapeCSVCell(value: any): string {
   if (value === null || value === undefined) return '';
+  // Arrays (e.g. ghsHazardCodes) are joined with semicolons
+  if (Array.isArray(value)) return escapeCSVCell(value.join(";"));
   const str = String(value);
   if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
     return `"${str.replace(/"/g, '""')}"`;

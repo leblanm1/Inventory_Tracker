@@ -72,10 +72,10 @@ Useful parameters:
 - `-Time "07:00"`
 - `-FallbackTaskName "InventoryDailyEnsureRunning"`
 - `-FallbackTime "07:05"`
-- `-RepoPath "C:\Invetory_Tracker"`
+- `-RepoPath "C:\Inventory_Tracker"`
 
 Optional manual run of the same maintenance flow:
-- `powershell -ExecutionPolicy Bypass -File scripts/morning-maintenance.ps1 -RepoPath "C:\Invetory_Tracker" -Port 3000`
+- `powershell -ExecutionPolicy Bypass -File scripts/morning-maintenance.ps1 -RepoPath "C:\Inventory_Tracker" -Port 3000`
 
 ## Secure Branch Strategy (Recommended)
 

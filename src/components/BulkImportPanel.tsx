@@ -390,7 +390,14 @@ export default function BulkImportPanel({
         catalogNum: sampleMeta.catalogNum || "",
         packaging: sampleMeta.packaging || "",
         price: sampleMeta.price || "",
-        lot: sampleMeta.lot || ""
+        lot: sampleMeta.lot || "",
+        ghsHazardCodes: sampleMeta.ghsHazardCodes
+          ? String(sampleMeta.ghsHazardCodes).split(";").map((c: string) => c.trim()).filter(Boolean)
+          : undefined,
+        sdsUrl: sampleMeta.sdsUrl || undefined,
+        storageClass: sampleMeta.storageClass || undefined,
+        minStockLevel: sampleMeta.minStockLevel ? parseFloat(sampleMeta.minStockLevel) : undefined,
+        reorderQty: sampleMeta.reorderQty ? parseFloat(sampleMeta.reorderQty) : undefined
       };
 
       return mappedSample;

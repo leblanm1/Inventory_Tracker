@@ -1,0 +1,44 @@
+--- a/src/components/AuditTrailModal.tsx
++++ b/src/components/AuditTrailModal.tsx
+@@ -7,6 +7,7 @@
+ import { AuditLog, AuditSnapshot } from "../types.js";
+ 
+ interface AuditTrailModalProps {
++  isOpen: boolean;
+   auditLogs: AuditLog[];
+   auditSnapshots: AuditSnapshot[];
+   auditSearch: string;
+@@ -19,6 +20,7 @@
+ }
+ 
+ export default function AuditTrailModal({
++  isOpen,
+   auditLogs,
+   auditSnapshots,
+   auditSearch,
+@@ -29,6 +31,8 @@
+   onRestoreFromSnapshot,
+   onClose
+ }: AuditTrailModalProps) {
++  if (!isOpen) return null;
++
+   const query = auditSearch.trim().toLowerCase();
+   const filteredAuditLogs = auditLogs.filter(log => {
+     if (!query) return true;
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -5944,6 +5944,7 @@
+       </main>
+ 
+       <AuditTrailModal
++        isOpen={showAuditTrailModal}
+         auditLogs={state.auditLogs}
+         auditSnapshots={state.auditSnapshots}
+         auditSearch={auditSearch}
+--- a/server.ts
++++ b/server.ts
+@@ -1,3 +1,4 @@
++import "dotenv/config";
+ import express from "express";
+ import os from "node:os";
+ import path from "path";

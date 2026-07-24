@@ -5944,6 +5944,7 @@ export default function App() {
       </main>
 
       <AuditTrailModal
+        isOpen={showAuditTrailModal}
         auditLogs={state.auditLogs}
         auditSnapshots={state.auditSnapshots}
         auditSearch={auditSearch}

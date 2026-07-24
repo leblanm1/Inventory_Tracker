@@ -174,7 +174,12 @@ export default function SampleFormModal({
         catalogNum: "",
         packaging: "",
         price: "",
-        lot: ""
+        lot: "",
+        ghsHazardCodes: [],
+        sdsUrl: "",
+        storageClass: "",
+        minStockLevel: undefined,
+        reorderQty: undefined
       };
       
       // Apply defaults from context
@@ -409,7 +414,7 @@ export default function SampleFormModal({
 
   // Get advanced fields (excluding keys already editable in the basic panel)
   const basicFields: (keyof Sample)[] = [
-    "chemicalName", "casNumber", "qty", "units", "itemType", "concentration", "volumeMass", "notes", "row", "col"
+    "chemicalName", "casNumber", "qty", "units", "itemType", "concentration", "volumeMass", "notes", "row", "col", "expiresOn"
   ];
   const advancedFields = ALL_CSV_HEADERS
     .map(h => HEADER_TO_FIELD_MAP[h.toLowerCase().replace(/[^a-z0-9]/g, "")] as keyof Sample)
@@ -788,6 +793,104 @@ export default function SampleFormModal({
                   </div>
                 </div>
               )}
+
+              <hr className="border-slate-100" />
+
+              {/* Lab Safety & Stock Management */}
+              <div className="space-y-4">
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  Lab Safety &amp; Stock Management
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      Expires On
+                    </label>
+                    <input
+                      type="date"
+                      value={formData.expiresOn || ""}
+                      onChange={e => handleFieldChange("expiresOn", e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm outline-hidden bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      Storage Class
+                    </label>
+                    <select
+                      value={formData.storageClass || ""}
+                      onChange={e => handleFieldChange("storageClass", e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-hidden"
+                    >
+                      <option value="">-- None --</option>
+                      <option value="flammable">Flammable</option>
+                      <option value="corrosive">Corrosive</option>
+                      <option value="oxidizer">Oxidizer</option>
+                      <option value="acid">Acid</option>
+                      <option value="base">Base</option>
+                      <option value="light-sensitive">Light-sensitive</option>
+                      <option value="general">General</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      GHS Hazard Codes (comma-separated)
+                    </label>
+                    <input
+                      type="text"
+                      value={Array.isArray(formData.ghsHazardCodes) ? formData.ghsHazardCodes.join(", ") : (formData.ghsHazardCodes || "")}
+                      onChange={e => handleFieldChange("ghsHazardCodes", e.target.value.split(",").map(c => c.trim()).filter(Boolean))}
+                      placeholder="e.g. H225, H319, H315"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm outline-hidden bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      SDS URL
+                    </label>
+                    <input
+                      type="url"
+                      value={formData.sdsUrl || ""}
+                      onChange={e => handleFieldChange("sdsUrl", e.target.value)}
+                      placeholder="https://example.com/sds.pdf"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm outline-hidden bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      Min Stock Level
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={formData.minStockLevel ?? ""}
+                      onChange={e => handleFieldChange("minStockLevel", e.target.value === "" ? undefined : Number(e.target.value))}
+                      placeholder="e.g. 5"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm outline-hidden bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      Reorder Quantity
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={formData.reorderQty ?? ""}
+                      onChange={e => handleFieldChange("reorderQty", e.target.value === "" ? undefined : Number(e.target.value))}
+                      placeholder="e.g. 20"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm outline-hidden bg-white"
+                    />
+                  </div>
+                </div>
+              </div>
 
               <hr className="border-slate-100" />
 
