@@ -48,6 +48,7 @@ Runs as a local web app. No database to install — all data is stored in a JSON
 - Paste CSV data directly or upload a spreadsheet. The import auto-creates storage units, shelves, racks, drawers, and boxes from the data — no need to pre-create the storage hierarchy.
 - Maps standard lab inventory spreadsheet headers (chemical name, CAS #, lab, phase, room, location, plasmid name, organism, gene, vector, concentration, volume/mass, expiry date, catalog #, lot, and more).
 - Import summary reports how many samples, storage units, shelves, racks, drawers, and boxes were created.
+- Template: [assets/import-templates/freezer-box-sample-import-template.csv](assets/import-templates/freezer-box-sample-import-template.csv)
 
 ### Bulk Move
 
