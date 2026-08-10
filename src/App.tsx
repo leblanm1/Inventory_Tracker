@@ -161,6 +161,16 @@ export default function App() {
   const [dragOverShelfId, setDragOverShelfId] = useState<string | null>(null);
   const [dragOverRackId, setDragOverRackId] = useState<string | null>(null);
   const [dragOverDrawerId, setDragOverDrawerId] = useState<string | null>(null);
+  const [draggingHierarchyItem, setDraggingHierarchyItem] = useState<{
+    type: "shelf" | "rack" | "drawer";
+    id: string;
+    parentId: string;
+  } | null>(null);
+  const [dragOverHierarchyItem, setDragOverHierarchyItem] = useState<{
+    type: "shelf" | "rack" | "drawer";
+    id: string;
+    parentId: string;
+  } | null>(null);
 
   // View Modes & Collapse States for Loose / Direct Items
   const [structureMinimized, setStructureMinimized] = useState<boolean>(false);
@@ -363,6 +373,137 @@ export default function App() {
   };
   const getBoxSamplesCount = (boxId: string) => {
     return state.samples.filter(s => s.boxId === boxId && !s.isArchived).length;
+  };
+
+  function reorderActiveItemsWithinParent<T extends { id: string; isArchived?: boolean }>(
+    items: T[],
+    parentPredicate: (item: T) => boolean,
+    draggedId: string,
+    targetId: string
+  ): T[] {
+    if (!draggedId || !targetId || draggedId === targetId) {
+      return items;
+    }
+
+    const activeGroupIndexes: number[] = [];
+    const activeGroupItems: T[] = [];
+
+    items.forEach((item, index) => {
+      if (parentPredicate(item) && !item.isArchived) {
+        activeGroupIndexes.push(index);
+        activeGroupItems.push(item);
+      }
+    });
+
+    const fromIndex = activeGroupItems.findIndex(item => item.id === draggedId);
+    const toIndex = activeGroupItems.findIndex(item => item.id === targetId);
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+      return items;
+    }
+
+    const reordered = [...activeGroupItems];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved);
+
+    const nextItems = [...items];
+    activeGroupIndexes.forEach((itemIndex, groupIndex) => {
+      nextItems[itemIndex] = reordered[groupIndex];
+    });
+
+    return nextItems;
+  }
+
+  const clearHierarchyDragState = () => {
+    setDraggingHierarchyItem(null);
+    setDragOverHierarchyItem(null);
+  };
+
+  const isHierarchyDropAllowed = (
+    type: "shelf" | "rack" | "drawer",
+    id: string,
+    parentId: string
+  ) => {
+    return Boolean(
+      draggingHierarchyItem &&
+      draggingHierarchyItem.type === type &&
+      draggingHierarchyItem.parentId === parentId &&
+      draggingHierarchyItem.id !== id
+    );
+  };
+
+  const handleDropReorderShelf = async (targetShelfId: string, storageId: string) => {
+    if (!isHierarchyDropAllowed("shelf", targetShelfId, storageId) || !draggingHierarchyItem) {
+      clearHierarchyDragState();
+      return;
+    }
+
+    const updatedShelves = reorderActiveItemsWithinParent<Shelf>(
+      state.shelves,
+      shelf => shelf.storageId === storageId,
+      draggingHierarchyItem.id,
+      targetShelfId
+    );
+
+    clearHierarchyDragState();
+
+    if (updatedShelves === state.shelves) return;
+
+    const storageName = state.storageUnits.find(unit => unit.id === storageId)?.name || "storage unit";
+    await saveStateToServer(
+      { ...state, shelves: updatedShelves },
+      "Shelves Reordered",
+      `Reordered shelves within ${storageName}.`
+    );
+  };
+
+  const handleDropReorderRack = async (targetRackId: string, shelfId: string) => {
+    if (!isHierarchyDropAllowed("rack", targetRackId, shelfId) || !draggingHierarchyItem) {
+      clearHierarchyDragState();
+      return;
+    }
+
+    const updatedRacks = reorderActiveItemsWithinParent<Rack>(
+      state.racks,
+      rack => rack.shelfId === shelfId,
+      draggingHierarchyItem.id,
+      targetRackId
+    );
+
+    clearHierarchyDragState();
+
+    if (updatedRacks === state.racks) return;
+
+    const shelfName = state.shelves.find(shelf => shelf.id === shelfId)?.name || "shelf";
+    await saveStateToServer(
+      { ...state, racks: updatedRacks },
+      "Racks Reordered",
+      `Reordered racks within ${shelfName}.`
+    );
+  };
+
+  const handleDropReorderDrawer = async (targetDrawerId: string, rackId: string) => {
+    if (!isHierarchyDropAllowed("drawer", targetDrawerId, rackId) || !draggingHierarchyItem) {
+      clearHierarchyDragState();
+      return;
+    }
+
+    const updatedDrawers = reorderActiveItemsWithinParent<Drawer>(
+      state.drawers,
+      drawer => drawer.rackId === rackId,
+      draggingHierarchyItem.id,
+      targetDrawerId
+    );
+
+    clearHierarchyDragState();
+
+    if (updatedDrawers === state.drawers) return;
+
+    const rackName = state.racks.find(rack => rack.id === rackId)?.name || "rack";
+    await saveStateToServer(
+      { ...state, drawers: updatedDrawers },
+      "Drawers Reordered",
+      `Reordered drawers within ${rackName}.`
+    );
   };
 
   // Fetch initial state
@@ -3338,12 +3479,37 @@ export default function App() {
                         {unitShelves.map(shelf => {
                           const isShelfActive = selectedShelfId === shelf.id;
                           const shelfRacks = state.racks
-                            .filter(r => r.shelfId === shelf.id && !r.isArchived)
-                            .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+                            .filter(r => r.shelfId === shelf.id && !r.isArchived);
                           const shelfDirectBoxes = state.boxes.filter(b => b.shelfId === shelf.id && !b.rackId && !b.isArchived);
+                          const isShelfDragOver =
+                            dragOverHierarchyItem?.type === "shelf" &&
+                            dragOverHierarchyItem.id === shelf.id &&
+                            dragOverHierarchyItem.parentId === unit.id;
                           return (
                             <div key={shelf.id} className="space-y-0.5">
                               <div
+                                draggable
+                                onDragStart={(e) => {
+                                  setDraggingHierarchyItem({ type: "shelf", id: shelf.id, parentId: unit.id });
+                                  e.dataTransfer.effectAllowed = "move";
+                                }}
+                                onDragEnd={clearHierarchyDragState}
+                                onDragOver={(e) => {
+                                  if (isHierarchyDropAllowed("shelf", shelf.id, unit.id)) {
+                                    e.preventDefault();
+                                    e.dataTransfer.dropEffect = "move";
+                                    setDragOverHierarchyItem({ type: "shelf", id: shelf.id, parentId: unit.id });
+                                  }
+                                }}
+                                onDragLeave={() => {
+                                  if (isShelfDragOver) {
+                                    setDragOverHierarchyItem(null);
+                                  }
+                                }}
+                                onDrop={(e) => {
+                                  e.preventDefault();
+                                  void handleDropReorderShelf(shelf.id, unit.id);
+                                }}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setSelectedShelfId(shelf.id);
@@ -3357,9 +3523,10 @@ export default function App() {
                                     : isShelfActive
                                     ? "text-indigo-600 font-semibold"
                                     : "text-slate-500 hover:bg-slate-50"
-                                }`}
+                                } ${isShelfDragOver ? "ring-1 ring-indigo-300 bg-indigo-50/40" : ""}`}
                               >
                                 <span className="truncate flex items-center gap-1">
+                                  <Move className="h-3 w-3 shrink-0 text-slate-300" />
                                   <Layers className="h-3 w-3 shrink-0" />
                                   <span className="truncate">{shelf.name}</span>
                                 </span>
@@ -3411,12 +3578,37 @@ export default function App() {
                                     {shelfRacks.map(rack => {
                                       const isRackActive = selectedRackId === rack.id;
                                       const rackDrawers = state.drawers
-                                        .filter(d => d.rackId === rack.id && !d.isArchived)
-                                        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+                                        .filter(d => d.rackId === rack.id && !d.isArchived);
                                       const rackBoxes = state.boxes.filter(b => b.rackId === rack.id && !b.drawerId && !b.isArchived);
+                                      const isRackDragOver =
+                                        dragOverHierarchyItem?.type === "rack" &&
+                                        dragOverHierarchyItem.id === rack.id &&
+                                        dragOverHierarchyItem.parentId === shelf.id;
                                       return (
                                         <div key={rack.id} className="space-y-0.5">
                                           <div
+                                            draggable
+                                            onDragStart={(e) => {
+                                              setDraggingHierarchyItem({ type: "rack", id: rack.id, parentId: shelf.id });
+                                              e.dataTransfer.effectAllowed = "move";
+                                            }}
+                                            onDragEnd={clearHierarchyDragState}
+                                            onDragOver={(e) => {
+                                              if (isHierarchyDropAllowed("rack", rack.id, shelf.id)) {
+                                                e.preventDefault();
+                                                e.dataTransfer.dropEffect = "move";
+                                                setDragOverHierarchyItem({ type: "rack", id: rack.id, parentId: shelf.id });
+                                              }
+                                            }}
+                                            onDragLeave={() => {
+                                              if (isRackDragOver) {
+                                                setDragOverHierarchyItem(null);
+                                              }
+                                            }}
+                                            onDrop={(e) => {
+                                              e.preventDefault();
+                                              void handleDropReorderRack(rack.id, shelf.id);
+                                            }}
                                             onClick={(e) => {
                                               e.stopPropagation();
                                               setSelectedRackId(rack.id);
@@ -3429,9 +3621,10 @@ export default function App() {
                                                 : isRackActive
                                                 ? "text-indigo-600 font-semibold"
                                                 : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-                                            }`}
+                                            } ${isRackDragOver ? "ring-1 ring-amber-300 bg-amber-50/40" : ""}`}
                                           >
                                             <span className="truncate flex items-center gap-1">
+                                              <Move className="h-2.5 w-2.5 shrink-0 text-slate-300" />
                                               <Layers className="h-2.5 w-2.5 shrink-0 text-amber-500" />
                                               <span className="truncate">{rack.name}</span>
                                             </span>
@@ -3482,9 +3675,35 @@ export default function App() {
                                               {rackDrawers.map(drawer => {
                                                 const isDrawerActive = selectedDrawerId === drawer.id;
                                                 const drawerBoxes = state.boxes.filter(b => b.drawerId === drawer.id && !b.isArchived);
+                                                const isDrawerDragOver =
+                                                  dragOverHierarchyItem?.type === "drawer" &&
+                                                  dragOverHierarchyItem.id === drawer.id &&
+                                                  dragOverHierarchyItem.parentId === rack.id;
                                                 return (
                                                   <div key={drawer.id} className="space-y-0.5">
                                                     <div
+                                                      draggable
+                                                      onDragStart={(e) => {
+                                                        setDraggingHierarchyItem({ type: "drawer", id: drawer.id, parentId: rack.id });
+                                                        e.dataTransfer.effectAllowed = "move";
+                                                      }}
+                                                      onDragEnd={clearHierarchyDragState}
+                                                      onDragOver={(e) => {
+                                                        if (isHierarchyDropAllowed("drawer", drawer.id, rack.id)) {
+                                                          e.preventDefault();
+                                                          e.dataTransfer.dropEffect = "move";
+                                                          setDragOverHierarchyItem({ type: "drawer", id: drawer.id, parentId: rack.id });
+                                                        }
+                                                      }}
+                                                      onDragLeave={() => {
+                                                        if (isDrawerDragOver) {
+                                                          setDragOverHierarchyItem(null);
+                                                        }
+                                                      }}
+                                                      onDrop={(e) => {
+                                                        e.preventDefault();
+                                                        void handleDropReorderDrawer(drawer.id, rack.id);
+                                                      }}
                                                       onClick={(e) => {
                                                         e.stopPropagation();
                                                         setSelectedDrawerId(drawer.id);
@@ -3496,9 +3715,10 @@ export default function App() {
                                                           : isDrawerActive
                                                           ? "text-indigo-600 font-semibold"
                                                           : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-                                                      }`}
+                                                      } ${isDrawerDragOver ? "ring-1 ring-emerald-300 bg-emerald-50/40" : ""}`}
                                                     >
                                                       <span className="truncate flex items-center gap-1">
+                                                        <Move className="h-2.5 w-2.5 shrink-0 text-slate-300" />
                                                         <Grid className="h-2.5 w-2.5 shrink-0 text-emerald-500" />
                                                         <span className="truncate">{drawer.name}</span>
                                                       </span>
