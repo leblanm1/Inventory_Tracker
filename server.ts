@@ -1700,6 +1700,104 @@ async function startServer() {
     }
   });
 
+  // POST /api/bulk-rename — rename existing records by id
+  app.post("/api/bulk-rename", async (req, res) => {
+    try {
+      const body = req.body as {
+        operations: Array<{
+          entityType: "storage" | "shelf" | "rack" | "drawer" | "box" | "sample";
+          id: string;
+          newName: string;
+        }>;
+      };
+
+      if (!body || !Array.isArray(body.operations) || body.operations.length === 0) {
+        res.status(400).json({ error: "Request body must contain a non-empty 'operations' array" });
+        return;
+      }
+
+      const invalidOperation = body.operations.find(
+        op => !op || !op.id || !op.newName || !op.entityType
+      );
+      if (invalidOperation) {
+        res.status(400).json({ error: "Each rename operation requires entityType, id, and newName" });
+        return;
+      }
+
+      const { clientVersion, user } = getRequestContext(req);
+      const result = await mutateState(
+        clientVersion,
+        user,
+        "Bulk Rename",
+        `Applied ${body.operations.length} rename operation(s).`,
+        (state) => {
+          const storageRenameMap = new Map<string, string>();
+          const shelfRenameMap = new Map<string, string>();
+          const rackRenameMap = new Map<string, string>();
+          const drawerRenameMap = new Map<string, string>();
+          const boxRenameMap = new Map<string, string>();
+          const sampleRenameMap = new Map<string, string>();
+
+          body.operations.forEach((op) => {
+            if (op.entityType === "storage") {
+              storageRenameMap.set(op.id, op.newName.trim());
+            } else if (op.entityType === "shelf") {
+              shelfRenameMap.set(op.id, op.newName.trim());
+            } else if (op.entityType === "rack") {
+              rackRenameMap.set(op.id, op.newName.trim());
+            } else if (op.entityType === "drawer") {
+              drawerRenameMap.set(op.id, op.newName.trim());
+            } else if (op.entityType === "box") {
+              boxRenameMap.set(op.id, op.newName.trim());
+            } else if (op.entityType === "sample") {
+              sampleRenameMap.set(op.id, op.newName.trim());
+            }
+          });
+
+          return {
+            ...state,
+            storageUnits: state.storageUnits.map(item =>
+              storageRenameMap.has(item.id)
+                ? { ...item, name: storageRenameMap.get(item.id) as string }
+                : item
+            ),
+            shelves: state.shelves.map(item =>
+              shelfRenameMap.has(item.id)
+                ? { ...item, name: shelfRenameMap.get(item.id) as string }
+                : item
+            ),
+            racks: state.racks.map(item =>
+              rackRenameMap.has(item.id)
+                ? { ...item, name: rackRenameMap.get(item.id) as string }
+                : item
+            ),
+            drawers: state.drawers.map(item =>
+              drawerRenameMap.has(item.id)
+                ? { ...item, name: drawerRenameMap.get(item.id) as string }
+                : item
+            ),
+            boxes: state.boxes.map(item =>
+              boxRenameMap.has(item.id)
+                ? { ...item, name: boxRenameMap.get(item.id) as string }
+                : item
+            ),
+            samples: state.samples.map(item =>
+              sampleRenameMap.has(item.id)
+                ? { ...item, chemicalName: sampleRenameMap.get(item.id) as string }
+                : item
+            )
+          };
+        }
+      );
+
+      res.json({ success: true, ...result.delta });
+    } catch (err) {
+      if (!handleMutateError(err, res)) {
+        res.status(500).json({ error: "Failed to bulk rename records" });
+      }
+    }
+  });
+
   app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (err?.type === "entity.too.large") {
       res.status(413).json({

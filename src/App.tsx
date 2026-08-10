@@ -39,6 +39,7 @@ import Fuse from "fuse.js";
 import SampleFormModal from "./components/SampleFormModal.jsx";
 import StorageFormModal from "./components/StorageFormModal.jsx";
 import BulkImportPanel from "./components/BulkImportPanel.jsx";
+import BulkRenamePanel from "./components/BulkRenamePanel.jsx";
 import BulkMoveModal from "./components/BulkMoveModal.jsx";
 import DashboardPanels from "./components/DashboardPanels.jsx";
 import SampleInspector from "./components/SampleInspector.jsx";
@@ -131,6 +132,7 @@ export default function App() {
   const [gridSelectionAnchorId, setGridSelectionAnchorId] = useState<string | null>(null);
   const [showTrash, setShowTrash] = useState(false);
   const [showBulkImport, setShowBulkImport] = useState(false);
+  const [showBulkRename, setShowBulkRename] = useState(false);
   const [showAuditTrailModal, setShowAuditTrailModal] = useState(false);
   const [scanInput, setScanInput] = useState("");
   const [isGeneratingQR, setIsGeneratingQR] = useState(false);
@@ -2999,6 +3001,75 @@ export default function App() {
     return true;
   };
 
+  const handleBulkRenameComplete = async (plan: {
+    operations: Array<{
+      entityType: "storage" | "shelf" | "rack" | "drawer" | "box" | "sample";
+      id: string;
+      oldName: string;
+      newName: string;
+    }>;
+  }): Promise<boolean> => {
+    if (!plan.operations.length) {
+      alert("No valid rename operations to apply.");
+      return false;
+    }
+
+    const updatedState: InventoryState = {
+      ...state,
+      storageUnits: [...state.storageUnits],
+      shelves: [...state.shelves],
+      racks: [...state.racks],
+      drawers: [...state.drawers],
+      boxes: [...state.boxes],
+      samples: [...state.samples]
+    };
+
+    plan.operations.forEach((op) => {
+      if (op.entityType === "storage") {
+        updatedState.storageUnits = updatedState.storageUnits.map(item =>
+          item.id === op.id ? { ...item, name: op.newName } : item
+        );
+      } else if (op.entityType === "shelf") {
+        updatedState.shelves = updatedState.shelves.map(item =>
+          item.id === op.id ? { ...item, name: op.newName } : item
+        );
+      } else if (op.entityType === "rack") {
+        updatedState.racks = updatedState.racks.map(item =>
+          item.id === op.id ? { ...item, name: op.newName } : item
+        );
+      } else if (op.entityType === "drawer") {
+        updatedState.drawers = updatedState.drawers.map(item =>
+          item.id === op.id ? { ...item, name: op.newName } : item
+        );
+      } else if (op.entityType === "box") {
+        updatedState.boxes = updatedState.boxes.map(item =>
+          item.id === op.id ? { ...item, name: op.newName } : item
+        );
+      } else {
+        updatedState.samples = updatedState.samples.map(item =>
+          item.id === op.id ? { ...item, chemicalName: op.newName } : item
+        );
+      }
+    });
+
+    const result = await apiMutate(
+      "/api/bulk-rename",
+      "POST",
+      { operations: plan.operations },
+      "Bulk Rename",
+      `Applied ${plan.operations.length} rename operation(s).`,
+      updatedState
+    );
+
+    if (!result) {
+      alert("Bulk rename could not be committed to the server. Please retry.");
+      return false;
+    }
+
+    setShowBulkRename(false);
+    return true;
+  };
+
   // Drag and Drop implementations for Grid slots
   const handleDragStart = (e: React.DragEvent, sampleId: string) => {
     e.dataTransfer.setData("text/plain", sampleId);
@@ -3538,7 +3609,12 @@ export default function App() {
           </div>
 
           <button
-            onClick={() => setShowBulkImport(!showBulkImport)}
+            onClick={() => {
+              setShowBulkImport(!showBulkImport);
+              if (!showBulkImport) {
+                setShowBulkRename(false);
+              }
+            }}
             className={`px-3 py-2 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
               showBulkImport 
                 ? "bg-slate-800 text-white" 
@@ -3547,6 +3623,23 @@ export default function App() {
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />
             Bulk Excel Import
+          </button>
+
+          <button
+            onClick={() => {
+              setShowBulkRename(!showBulkRename);
+              if (!showBulkRename) {
+                setShowBulkImport(false);
+              }
+            }}
+            className={`px-3 py-2 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+              showBulkRename
+                ? "bg-amber-600 text-white"
+                : "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200/50"
+            }`}
+          >
+            <Edit2 className="w-3.5 h-3.5" />
+            Bulk Rename
           </button>
 
           <button
@@ -4249,6 +4342,16 @@ export default function App() {
               drawers={state.drawers}
               boxes={state.boxes}
               onImportComplete={handleBulkImportComplete}
+            />
+          ) : showBulkRename ? (
+            <BulkRenamePanel
+              storageUnits={state.storageUnits}
+              shelves={state.shelves}
+              racks={state.racks}
+              drawers={state.drawers}
+              boxes={state.boxes}
+              samples={state.samples}
+              onRenameComplete={handleBulkRenameComplete}
             />
           ) : (
             <>
