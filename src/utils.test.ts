@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parseCSV, escapeCSVCell, convertSamplesToCSV, ALL_CSV_HEADERS, HEADER_TO_FIELD_MAP } from "./utils.js";
-import { Sample } from "./types.js";
+import { parseCSV, escapeCSVCell, convertSamplesToCSV, convertInventoryToCSV, ALL_CSV_HEADERS, HEADER_TO_FIELD_MAP } from "./utils.js";
+import { Box, Drawer, Rack, Sample, Shelf, StorageUnit } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // CSV Parser (RFC 4180 compliance)
@@ -189,6 +189,43 @@ describe("convertSamplesToCSV", () => {
     // Verify GHS codes are semicolon-joined in the CSV
     const ghsHeaderIdx = ALL_CSV_HEADERS.indexOf("GHS Hazard Codes");
     expect(rows[1][ghsHeaderIdx]).toBe("H225;H314");
+  });
+});
+
+describe("convertInventoryToCSV", () => {
+  it("includes empty boxes as dedicated rows", () => {
+    const storageUnit: StorageUnit = { id: "store-1", name: "Freezer A", type: "freezer" };
+    const shelf: Shelf = { id: "shelf-1", storageId: "store-1", name: "Shelf 1" };
+    const rack: Rack = { id: "rack-1", storageId: "store-1", shelfId: "shelf-1", name: "Rack 1" };
+    const drawer: Drawer = { id: "drawer-1", storageId: "store-1", shelfId: "shelf-1", rackId: "rack-1", name: "Drawer 1" };
+    const box: Box = {
+      id: "box-1",
+      storageId: "store-1",
+      shelfId: "shelf-1",
+      rackId: "rack-1",
+      drawerId: "drawer-1",
+      name: "Box A",
+      rows: null,
+      cols: null,
+      isArchived: false
+    };
+
+    const csv = convertInventoryToCSV([], [box], {
+      storageUnits: [storageUnit],
+      shelves: [shelf],
+      racks: [rack],
+      drawers: [drawer],
+      boxes: [box]
+    });
+
+    const rows = parseCSV(csv);
+    expect(rows.length).toBe(2);
+    const itemTypeIdx = ALL_CSV_HEADERS.indexOf("Item Type");
+    const boxIdIdx = ALL_CSV_HEADERS.indexOf("Box ID");
+    const boxNameIdx = ALL_CSV_HEADERS.indexOf("Box Name");
+    expect(rows[1][itemTypeIdx]).toBe("Box");
+    expect(rows[1][boxIdIdx]).toBe("box-1");
+    expect(rows[1][boxNameIdx]).toBe("Box A");
   });
 });
 

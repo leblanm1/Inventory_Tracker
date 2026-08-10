@@ -32,7 +32,7 @@ import {
   PanelRightOpen
 } from "lucide-react";
 import { StorageUnit, Shelf, Box, Sample, AuditLog, InventoryState, Rack, Drawer, AuditSnapshot } from "./types.js";
-import { convertSamplesToCSV } from "./utils.js";
+import { convertInventoryToCSV } from "./utils.js";
 import { initAuth, authFetch } from "./auth.js";
 import { getExpiryStatus, getExpiryColorClass, getExpiryBadgeClass, getExpiryLabel, getDaysUntilExpiry, isLowStock, getGHSPictograms, GHS_PICTOGRAM_SYMBOLS, GHS_PICTOGRAM_LABELS, checkCompatibility, isIncompatible } from "./labUtils.js";
 import Fuse from "fuse.js";
@@ -976,7 +976,14 @@ export default function App() {
   // Helper to trigger full CSV backup download
   const handleCSVExport = () => {
     const activeSamples = state.samples.filter(s => !s.isArchived);
-    const csvContent = convertSamplesToCSV(activeSamples);
+    const activeBoxes = state.boxes.filter(b => !b.isArchived);
+    const csvContent = convertInventoryToCSV(activeSamples, activeBoxes, {
+      storageUnits: state.storageUnits.filter(u => !u.isArchived),
+      shelves: state.shelves.filter(s => !s.isArchived),
+      racks: state.racks.filter(r => !r.isArchived),
+      drawers: state.drawers.filter(d => !d.isArchived),
+      boxes: activeBoxes
+    });
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -2597,7 +2604,7 @@ export default function App() {
         newBoxes: importedData.newBoxes
       },
       "Bulk CSV Import",
-      `Successfully imported ${importedData.samples.length} items from external sheet with header mapping.`,
+      `Successfully imported ${importedData.samples.length} sample(s) and ${importedData.newBoxes.length} box(es) from external sheet with header mapping.`,
       {
         ...state,
         storageUnits: mergeArrays(state.storageUnits, importedData.newStorageUnits),

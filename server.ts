@@ -1669,7 +1669,13 @@ async function startServer() {
         return;
       }
       const { clientVersion, user } = getRequestContext(req);
-      const result = await mutateState(clientVersion, user, "Bulk Import", `Imported ${body.samples.length} sample(s) via CSV.`, (state) => {
+      const boxCount = Array.isArray(body.newBoxes) ? body.newBoxes.length : 0;
+      const result = await mutateState(
+        clientVersion,
+        user,
+        "Bulk Import",
+        `Imported ${body.samples.length} sample(s) and ${boxCount} box(es) via CSV.`,
+        (state) => {
         // Append new storage hierarchy items (dedup by ID)
         const mergeArrays = <T extends { id: string }>(existing: T[], incoming?: T[]): T[] => {
           if (!incoming || incoming.length === 0) return existing;

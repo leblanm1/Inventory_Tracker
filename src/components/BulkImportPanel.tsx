@@ -106,7 +106,9 @@ export default function BulkImportPanel({
 
     // Map rows to samples
     const now = new Date().toISOString();
-    const importedSamples: Sample[] = previewRows.map((row, index) => {
+    const importedSamples: Sample[] = [];
+
+    previewRows.forEach((row, index) => {
       // Create empty metadata
       const sampleMeta: Record<string, any> = {};
       
@@ -314,11 +316,17 @@ export default function BulkImportPanel({
         targetBoxId = matched.id;
       }
 
+      const isBoxRow = String(sampleMeta.itemType || "").trim().toLowerCase() === "box";
+
       // Determine grid row & col
       let finalRow = parseInt(sampleMeta.row);
       let finalCol = parseInt(sampleMeta.col);
       if (isNaN(finalRow)) finalRow = null as any;
       if (isNaN(finalCol)) finalCol = null as any;
+
+      if (isBoxRow) {
+        return;
+      }
 
       const mappedSample: Sample = {
         id: `sample-import-${Date.now()}-${index}`,
@@ -400,7 +408,7 @@ export default function BulkImportPanel({
         reorderQty: sampleMeta.reorderQty ? parseFloat(sampleMeta.reorderQty) : undefined
       };
 
-      return mappedSample;
+      importedSamples.push(mappedSample);
     });
 
     onImportComplete({
@@ -419,7 +427,7 @@ export default function BulkImportPanel({
     setFileName("");
     setStatusMsg({
       type: "success",
-      text: `Import complete! Successfully imported ${importedSamples.length} samples. Created ${dynamicUnits.length} storage units, ${dynamicShelves.length} shelf layers, ${dynamicRacks.length} racks, ${dynamicDrawers.length} drawers, and ${dynamicBoxes.length} box containers.`
+      text: `Import complete! Successfully imported ${importedSamples.length} samples and created ${dynamicUnits.length} storage units, ${dynamicShelves.length} shelf layers, ${dynamicRacks.length} racks, ${dynamicDrawers.length} drawers, and ${dynamicBoxes.length} box containers.`
     });
   };
 

@@ -101,7 +101,7 @@ Runs as a local web app. No database to install — all data is stored in a JSON
 ### Export & Backup
 
 - **Export JSON backup**: Downloads the full inventory state as a JSON file.
-- **Export CSV**: Downloads all samples as a CSV file.
+- **Export CSV**: Downloads all active samples plus boxes as a CSV file.
 - **Export audit trail**: Download as JSON or CSV from the Audit Trail modal.
 - **Import JSON backup**: Restore the entire database from a previously exported JSON file.
 
@@ -201,7 +201,7 @@ npm run backup:now
 ### Export from the UI
 
 - **Export JSON backup**: Click the "Export JSON backup" button in the toolbar. Downloads the full state as a JSON file.
-- **Export CSV**: Click "Export CSV" to download all samples as a CSV file.
+- **Export CSV**: Click "Export CSV" to download all active samples and boxes as a CSV file.
 - **Export audit trail**: Open the Audit Trail modal and click "Export JSON" or "Export CSV".
 
 ### Restore from Backup
@@ -360,7 +360,7 @@ npm run lint    # TypeScript type checking
 
 The test suite (64 tests across 2 files) covers:
 
-- **`src/utils.test.ts`** (22 tests): CSV parsing (simple, multi-row, quoted fields, edge cases), CSV cell escaping, CSV export from samples, header-to-field mapping.
+- **`src/utils.test.ts`** (23 tests): CSV parsing (simple, multi-row, quoted fields, edge cases), CSV cell escaping, CSV export from samples and inventory rows, header-to-field mapping.
 - **`src/labUtils.test.ts`** (42 tests): Expiry status calculation, expiry color/badge classes, expiry labels, days-until-expiry, expiring sample filtering, low-stock detection, low-stock sample sorting, shopping list CSV generation, GHS pictogram mapping, storage compatibility matrix, compatibility checking.
 
 ---

@@ -1,4 +1,4 @@
-import { Sample } from "./types.js";
+import { Box, Drawer, Rack, Sample, Shelf, StorageUnit } from "./types.js";
 
 /**
  * Standard CSV Headers requested by user
@@ -187,23 +187,212 @@ export function escapeCSVCell(value: any): string {
  */
 export function convertSamplesToCSV(samples: Sample[]): string {
   const lines: string[] = [];
-  
+
   // Header line
   lines.push(ALL_CSV_HEADERS.join(","));
   
   // Row lines
   for (const sample of samples) {
-    const rowValues = ALL_CSV_HEADERS.map(header => {
-      const norm = normalizeHeader(header);
-      const field = HEADER_TO_FIELD_MAP[norm];
-      if (!field) return '';
-      
-      const val = sample[field];
-      return escapeCSVCell(val);
-    });
-    lines.push(rowValues.join(","));
+    lines.push(buildSampleCsvRow(sample).join(","));
   }
   
+  return lines.join("\n");
+}
+
+type InventoryCsvLookups = {
+  storageUnits: StorageUnit[];
+  shelves: Shelf[];
+  racks: Rack[];
+  drawers: Drawer[];
+  boxes: Box[];
+};
+
+function buildSampleCsvRow(sample: Sample, lookups?: InventoryCsvLookups): string[] {
+  const storageUnit = lookups?.storageUnits.find(unit => unit.id === sample.storageId);
+  const shelf = lookups?.shelves.find(item => item.id === sample.shelfId);
+  const rack = sample.rackId && lookups?.racks ? lookups.racks.find(item => item.id === sample.rackId) : undefined;
+  const drawer = sample.drawerId && lookups?.drawers ? lookups.drawers.find(item => item.id === sample.drawerId) : undefined;
+  const box = sample.boxId && lookups?.boxes ? lookups.boxes.find(item => item.id === sample.boxId) : undefined;
+
+  const combinedLocation = [storageUnit?.name, shelf?.name, rack?.name, drawer?.name, box?.name].filter(Boolean).join(" / ");
+
+  const valuesByHeader: Record<string, any> = {
+    chemicalid: sample.chemicalId,
+    chemicalname: sample.chemicalName,
+    casnumber: sample.casNumber,
+    lab: sample.lab,
+    qty: sample.qty,
+    units: sample.units,
+    phase: sample.phase,
+    room: sample.room,
+    location: sample.location || combinedLocation,
+    sublocation: sample.subLocation || combinedLocation,
+    status: sample.status,
+    plasmidname: sample.plasmidName,
+    primarybox: sample.primaryBox,
+    secondarybox: sample.secondaryBox,
+    primarytube: sample.primaryTube,
+    secondarytube: sample.secondaryTube,
+    primarydatedeposited: sample.primaryDateDeposited,
+    secondarydatedeposited: sample.secondaryDateDeposited,
+    primarydepositedby: sample.primaryDepositedBy,
+    secondarydepositedby: sample.secondaryDepositedBy,
+    primarypreparationconcentration: sample.primaryPrep,
+    secondarypreparationconcentration: sample.secondaryPrep,
+    primaryreference: sample.primaryRef,
+    secondaryreference: sample.secondaryRef,
+    system: sample.system,
+    organism: sample.organism,
+    gene: sample.gene,
+    fragmentsize: sample.fragmentSize,
+    mutations: sample.mutations,
+    vector: sample.vector,
+    markers: sample.markers,
+    hosts: sample.hosts,
+    notebookreference: sample.notebookRef,
+    source: sample.source,
+    file: sample.file,
+    freezerid: sample.freezerIdStr || storageUnit?.id || "",
+    freezername: sample.freezerNameStr || storageUnit?.name || "",
+    shelfid: sample.shelfIdStr || shelf?.id || "",
+    shelfname: sample.shelfNameStr || shelf?.name || "",
+    rackid: sample.rackIdStr || rack?.id || "",
+    rackname: sample.rackName || rack?.name || "",
+    drawerid: sample.drawerIdStr || drawer?.id || "",
+    drawername: sample.drawerNameStr || drawer?.name || "",
+    categoryid: sample.categoryId,
+    categoryname: sample.categoryName,
+    boxid: sample.boxId || sample.boxIdStr || box?.id || "",
+    boxname: sample.boxNameStr || box?.name || "",
+    itemgroupid: sample.itemGroupId,
+    itemgroupname: sample.itemGroupName,
+    itemid: sample.itemId,
+    itemname: sample.itemName || sample.chemicalName || "",
+    row: sample.row,
+    column: sample.col,
+    concentration: sample.concentration,
+    volumemass: sample.volumeMass,
+    expireson: sample.expiresOn,
+    createdon: sample.createdOn,
+    notes: sample.notes,
+    catalog: sample.catalogNum,
+    packaging: sample.packaging,
+    price: sample.price,
+    lot: sample.lot,
+    itemtype: sample.itemType || (box ? "Sample" : ""),
+    ghshazardcodes: sample.ghsHazardCodes,
+    sdsurl: sample.sdsUrl,
+    storageclass: sample.storageClass,
+    minstocklevel: sample.minStockLevel,
+    reorderqty: sample.reorderQty
+  };
+
+  return ALL_CSV_HEADERS.map(header => {
+    const norm = normalizeHeader(header);
+    return escapeCSVCell(valuesByHeader[norm] ?? "");
+  });
+}
+
+function buildBoxCsvRow(box: Box, lookups: InventoryCsvLookups): string[] {
+  const storageUnit = lookups.storageUnits.find(unit => unit.id === box.storageId);
+  const shelf = lookups.shelves.find(item => item.id === box.shelfId);
+  const rack = box.rackId ? lookups.racks.find(item => item.id === box.rackId) : undefined;
+  const drawer = box.drawerId ? lookups.drawers.find(item => item.id === box.drawerId) : undefined;
+  const locationParts = [storageUnit?.name, shelf?.name, rack?.name, drawer?.name, box.name].filter(Boolean);
+
+  const valuesByHeader: Record<string, string> = {
+    chemicalid: "",
+    chemicalname: "",
+    casnumber: "",
+    lab: "",
+    qty: "",
+    units: "",
+    phase: "",
+    room: "",
+    location: storageUnit?.name || "",
+    sublocation: locationParts.slice(1).join(" / "),
+    status: box.isArchived ? "Archived" : "Box",
+    plasmidname: "",
+    primarybox: "",
+    secondarybox: "",
+    primarytube: "",
+    secondarytube: "",
+    primarydatedeposited: "",
+    secondarydatedeposited: "",
+    primarydepositedby: "",
+    secondarydepositedby: "",
+    primarypreparationconcentration: "",
+    secondarypreparationconcentration: "",
+    primaryreference: "",
+    secondaryreference: "",
+    system: "",
+    organism: "",
+    gene: "",
+    fragmentsize: "",
+    mutations: "",
+    vector: "",
+    markers: "",
+    hosts: "",
+    notebookreference: "",
+    source: "",
+    file: "",
+    freezerid: storageUnit?.id || "",
+    freezername: storageUnit?.name || "",
+    shelfid: shelf?.id || "",
+    shelfname: shelf?.name || "",
+    rackid: rack?.id || "",
+    rackname: rack?.name || "",
+    drawerid: drawer?.id || "",
+    drawername: drawer?.name || "",
+    categoryid: "",
+    categoryname: "",
+    boxid: box.id,
+    boxname: box.name,
+    itemgroupid: "",
+    itemgroupname: "",
+    itemid: box.id,
+    itemname: box.name,
+    row: "",
+    column: "",
+    concentration: "",
+    volumemass: box.rows && box.cols ? `${box.rows}x${box.cols}` : "",
+    expireson: "",
+    createdon: "",
+    notes: box.rows && box.cols ? `${box.rows}x${box.cols} grid box` : "",
+    catalog: "",
+    packaging: "",
+    price: "",
+    lot: "",
+    itemtype: "Box",
+    ghshazardcodes: "",
+    sdsurl: "",
+    storageclass: "",
+    minstocklevel: "",
+    reorderqty: ""
+  };
+
+  return ALL_CSV_HEADERS.map(header => escapeCSVCell(valuesByHeader[normalizeHeader(header)] || ""));
+}
+
+/**
+ * Converts active samples and boxes back to a full CSV String.
+ */
+export function convertInventoryToCSV(
+  samples: Sample[],
+  boxes: Box[],
+  lookups: InventoryCsvLookups
+): string {
+  const lines: string[] = [ALL_CSV_HEADERS.join(",")];
+  const inventoryLookups: InventoryCsvLookups = { ...lookups, boxes };
+
+  for (const box of boxes) {
+    lines.push(buildBoxCsvRow(box, inventoryLookups).join(","));
+  }
+
+  for (const sample of samples) {
+    lines.push(buildSampleCsvRow(sample, inventoryLookups).join(","));
+  }
+
   return lines.join("\n");
 }
 
