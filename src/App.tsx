@@ -457,12 +457,13 @@ export default function App() {
     e.stopPropagation();
 
     const dragPayload = readDragPayload(e);
-    if (!dragPayload || dragPayload.type !== "box") {
+    const incomingBoxId = dragPayload?.type === "box" ? dragPayload.id : draggedBoxId;
+    if (!incomingBoxId) {
       clearBoxDragState();
       return;
     }
 
-    const draggedBox = state.boxes.find(b => b.id === dragPayload.id && !b.isArchived);
+    const draggedBox = state.boxes.find(b => b.id === incomingBoxId && !b.isArchived);
     const targetDrawer = state.drawers.find(d => d.id === drawerId && !d.isArchived);
     if (!draggedBox || !targetDrawer) {
       clearBoxDragState();
@@ -547,6 +548,20 @@ export default function App() {
       { ...state, boxes: updatedBoxes, samples: updatedSamples },
       actionName,
       actionDesc
+    );
+  };
+
+  const handleUnassignBoxFromSlot = async (boxId: string) => {
+    const box = state.boxes.find(b => b.id === boxId && !b.isArchived);
+    if (!box || !box.drawerId) return;
+
+    const drawer = state.drawers.find(d => d.id === box.drawerId && !d.isArchived);
+    const updatedBoxes = state.boxes.map(b => b.id === boxId ? { ...b, drawerSlot: null } : b);
+
+    await saveStateToServer(
+      { ...state, boxes: updatedBoxes },
+      "Drawer Slot Cleared",
+      `Removed box "${box.name}" from its assigned slot in drawer "${drawer?.name || "Unknown Drawer"}".`
     );
   };
 
@@ -2672,6 +2687,7 @@ export default function App() {
     rackId: string | null;
     drawerId: string | null;
     boxId: string | null;
+    drawerSlot: number | null;
   }) => {
     if (!bulkSelectedIds.length) return;
 
@@ -2703,6 +2719,41 @@ export default function App() {
         const destinationDrawer = state.drawers.find(d => d.id === destination.drawerId && !d.isArchived);
         if (destinationDrawer) {
           const drawerCapacity = getDrawerCapacity(destinationDrawer);
+
+          if (destination.drawerSlot !== null) {
+            if (bulkSelectedIds.length !== 1) {
+              alert("Select exactly one box when targeting a specific drawer slot.");
+              return;
+            }
+
+            if (destination.drawerSlot < 1 || destination.drawerSlot > drawerCapacity) {
+              alert(`Slot must be between 1 and ${drawerCapacity} for drawer "${destinationDrawer.name}".`);
+              return;
+            }
+
+            const selectedBox = state.boxes.find(b => b.id === bulkSelectedIds[0] && !b.isArchived);
+            if (!selectedBox) {
+              alert("Selected box was not found.");
+              return;
+            }
+
+            const slotOccupant = state.boxes.find(
+              b =>
+                !b.isArchived &&
+                b.drawerId === destinationDrawer.id &&
+                typeof b.drawerSlot === "number" &&
+                b.drawerSlot === destination.drawerSlot &&
+                b.id !== selectedBox.id
+            );
+
+            if (slotOccupant) {
+              alert(`Drawer slot ${destination.drawerSlot} is occupied by "${slotOccupant.name}".`);
+              return;
+            }
+
+            destinationSlotMap.set(selectedBox.id, destination.drawerSlot);
+          }
+
           const existingCount = state.boxes.filter(
             b => !b.isArchived && b.drawerId === destinationDrawer.id && !bulkSelectedIds.includes(b.id)
           ).length;
@@ -2725,6 +2776,10 @@ export default function App() {
               .map(b => b.drawerSlot as number)
           );
 
+          if (destination.drawerSlot !== null) {
+            occupiedSlots.add(destination.drawerSlot);
+          }
+
           const movingBoxes = state.boxes.filter(b => bulkSelectedIds.includes(b.id));
           let slotCursor = 1;
           const allocateNextSlot = (): number | null => {
@@ -2741,6 +2796,10 @@ export default function App() {
           };
 
           movingBoxes.forEach(boxItem => {
+            if (destinationSlotMap.has(boxItem.id)) {
+              return;
+            }
+
             if (
               boxItem.drawerId === destinationDrawer.id &&
               typeof boxItem.drawerSlot === "number" &&
@@ -4765,11 +4824,10 @@ export default function App() {
                                     const slotBox = slottedBoxMap.get(slotNum);
                                     const isSlotDragOver = dragOverDrawerSlot === slotNum;
                                     return (
-                                      <button
+                                      <div
                                         key={slotNum}
                                         onDragOver={(e) => {
-                                          const payload = readDragPayload(e);
-                                          if (payload?.type === "box") {
+                                          if (draggedBoxId) {
                                             e.preventDefault();
                                             e.dataTransfer.dropEffect = "move";
                                             setDragOverDrawerSlot(slotNum);
@@ -4790,11 +4848,36 @@ export default function App() {
                                           }
                                           handleOpenNewBoxModal(slotNum);
                                         }}
-                                        className={`text-left rounded-md border px-2 py-1.5 text-[10px] transition-colors ${slotBox ? "bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100" : "bg-white border-slate-200 text-slate-400"} ${isSlotDragOver ? "ring-2 ring-indigo-300 border-indigo-300 bg-indigo-100/50" : ""}`}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter" || e.key === " ") {
+                                            e.preventDefault();
+                                            if (slotBox) {
+                                              setSelectedBoxId(slotBox.id);
+                                              return;
+                                            }
+                                            handleOpenNewBoxModal(slotNum);
+                                          }
+                                        }}
+                                        role="button"
+                                        tabIndex={0}
+                                        className={`text-left rounded-md border px-2 py-1.5 text-[10px] transition-colors relative ${slotBox ? "bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100" : "bg-white border-slate-200 text-slate-400"} ${isSlotDragOver ? "ring-2 ring-indigo-300 border-indigo-300 bg-indigo-100/50" : ""}`}
                                       >
+                                        {slotBox && (
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              void handleUnassignBoxFromSlot(slotBox.id);
+                                            }}
+                                            className="absolute top-1 right-1 px-1 py-0.5 rounded bg-white/90 border border-indigo-200 text-[8px] font-bold text-indigo-600 hover:bg-white"
+                                            title="Remove this box from slot assignment"
+                                          >
+                                            Unslot
+                                          </button>
+                                        )}
                                         <div className="font-bold">Slot {slotNum}</div>
                                         <div className="truncate">{slotBox ? slotBox.name : "Empty"}</div>
-                                      </button>
+                                      </div>
                                     );
                                   })}
                                 </div>

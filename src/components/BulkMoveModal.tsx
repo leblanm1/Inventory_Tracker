@@ -23,6 +23,7 @@ interface BulkMoveModalProps {
     rackId: string | null;
     drawerId: string | null;
     boxId: string | null;
+    drawerSlot: number | null;
   }) => void;
 }
 
@@ -48,6 +49,7 @@ export default function BulkMoveModal({
   const [selectedRack, setSelectedRack] = useState("");
   const [selectedDrawer, setSelectedDrawer] = useState("");
   const [selectedBox, setSelectedBox] = useState("");
+  const [selectedDrawerSlot, setSelectedDrawerSlot] = useState("");
   const [validationError, setValidationError] = useState("");
 
   const activeStorageUnits = React.useMemo(() => storageUnits.filter(u => !u.isArchived), [storageUnits]);
@@ -62,6 +64,7 @@ export default function BulkMoveModal({
       setSelectedRack(defaultRackId || "");
       setSelectedDrawer(defaultDrawerId || "");
       setSelectedBox(defaultBoxId || "");
+      setSelectedDrawerSlot("");
     }
   }, [isOpen, defaultStorageId, defaultShelfId, defaultRackId, defaultDrawerId, defaultBoxId, storageUnits]);
 
@@ -71,6 +74,7 @@ export default function BulkMoveModal({
     setSelectedRack("");
     setSelectedDrawer("");
     setSelectedBox("");
+    setSelectedDrawerSlot("");
   };
 
   const handleShelfChange = (shelfId: string) => {
@@ -78,17 +82,20 @@ export default function BulkMoveModal({
     setSelectedRack("");
     setSelectedDrawer("");
     setSelectedBox("");
+    setSelectedDrawerSlot("");
   };
 
   const handleRackChange = (rackId: string) => {
     setSelectedRack(rackId);
     setSelectedDrawer("");
     setSelectedBox("");
+    setSelectedDrawerSlot("");
   };
 
   const handleDrawerChange = (drawerId: string) => {
     setSelectedDrawer(drawerId);
     setSelectedBox("");
+    setSelectedDrawerSlot("");
   };
 
   const handleBoxChange = (boxId: string) => {
@@ -105,6 +112,8 @@ export default function BulkMoveModal({
   const currentDrawers = drawers
     .filter(d => d.rackId === selectedRack && !d.isArchived)
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+  const selectedDrawerEntity = currentDrawers.find(d => d.id === selectedDrawer);
+  const selectedDrawerCapacity = Math.max(1, Math.min(500, Number(selectedDrawerEntity?.boxCapacity) || 4));
   
   // Boxes can be direct on shelf, inside a rack, or inside a drawer
   const currentBoxes = boxes.filter(b => {
@@ -141,7 +150,8 @@ export default function BulkMoveModal({
       shelfId: selectedShelf,
       rackId: selectedRack || null,
       drawerId: selectedDrawer || null,
-      boxId: selectedBox || null
+      boxId: selectedBox || null,
+      drawerSlot: selectedDrawerSlot ? Number(selectedDrawerSlot) : null
     });
   };
 
@@ -240,6 +250,24 @@ export default function BulkMoveModal({
                 <option value="">-- Direct in Rack (No Drawer) --</option>
                 {currentDrawers.map(drawer => (
                   <option key={drawer.id} value={drawer.id}>{drawer.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {itemType === "box" && selectedDrawer && (
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                <Grid className="h-3 w-3" /> Drawer Slot (Optional)
+              </label>
+              <select
+                value={selectedDrawerSlot}
+                onChange={e => setSelectedDrawerSlot(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 text-xs font-semibold outline-hidden cursor-pointer"
+              >
+                <option value="">-- Auto-assign slot --</option>
+                {Array.from({ length: selectedDrawerCapacity }, (_, idx) => idx + 1).map(slotNum => (
+                  <option key={slotNum} value={String(slotNum)}>Slot {slotNum}</option>
                 ))}
               </select>
             </div>
