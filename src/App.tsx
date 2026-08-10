@@ -5131,70 +5131,51 @@ export default function App() {
                     })()}
                   </div>
                 ) : currentRack ? (
-                  /* 3. Rack Level - Shows Drawers and Direct Boxes inside this Rack */
+                  /* 3. Rack Level - Shows Boxes inside Drawers */
                   <div className="space-y-6 flex-1 flex flex-col overflow-y-auto pb-4">
-                    {/* Drawers */}
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
                         <h4 className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">
-                          Drawers in this Rack ({state.drawers.filter(d => d.rackId === currentRack.id && !d.isArchived).length})
+                          Drawer Box Grid ({state.drawers.filter(d => d.rackId === currentRack.id && !d.isArchived).length} drawers)
                         </h4>
                       </div>
+
                       {(() => {
                         const rackDrawers = state.drawers
                           .filter(d => d.rackId === currentRack.id && !d.isArchived)
                           .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+
                         return (
-                          <div className="flex flex-col gap-3 max-w-xl mx-auto w-full p-4 bg-slate-100 border border-slate-200 rounded-2xl shadow-inner">
-                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center border-b border-slate-200 pb-2 mb-1">
-                              Rack Vertical Drawer Frame
-                            </div>
+                          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                             {rackDrawers.map(drawer => {
-                              const samplesCount = getDrawerSamplesCount(drawer.id);
-                              const drawerBoxesCount = state.boxes.filter(b => b.drawerId === drawer.id && !b.isArchived).length;
-                              const isDrawerDragOver = dragOverDrawerId === drawer.id;
+                              const drawerBoxes = state.boxes
+                                .filter(b => b.drawerId === drawer.id && !b.isArchived)
+                                .sort((a, b) => {
+                                  const aSlot = typeof a.drawerSlot === "number" ? a.drawerSlot : Number.MAX_SAFE_INTEGER;
+                                  const bSlot = typeof b.drawerSlot === "number" ? b.drawerSlot : Number.MAX_SAFE_INTEGER;
+                                  if (aSlot !== bSlot) return aSlot - bSlot;
+                                  return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+                                });
+                              const drawerCapacity = getDrawerCapacity(drawer);
+                              const isDrawerActive = selectedDrawerId === drawer.id;
                               return (
-                                <div 
+                                <div
                                   key={drawer.id}
                                   onClick={() => setSelectedDrawerId(drawer.id)}
-                                  draggable={true}
-                                  onDragStart={(e) => {
-                                    e.dataTransfer.setData("text/plain", JSON.stringify({ type: "drawer", id: drawer.id }));
-                                  }}
-                                  onDragOver={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    setDragOverDrawerId(drawer.id);
-                                  }}
-                                  onDragLeave={() => setDragOverDrawerId(null)}
-                                  onDrop={(e) => {
-                                    setDragOverDrawerId(null);
-                                    handleDropMove(e, "drawer", drawer.id);
-                                  }}
-                                  className={`group relative flex items-center justify-between bg-white hover:bg-emerald-50/10 border hover:border-emerald-400 rounded-lg p-3 shadow-3xs hover:shadow-xs transition-all duration-200 cursor-pointer h-16 overflow-hidden select-none ${
-                                    isDrawerDragOver
-                                      ? "bg-emerald-50 border-dashed border-2 border-emerald-500 scale-[1.02]"
-                                      : "border-slate-200"
+                                  className={`group relative rounded-2xl border bg-white shadow-3xs overflow-hidden transition-all cursor-pointer ${
+                                    isDrawerActive ? "border-indigo-300 ring-2 ring-indigo-100" : "border-slate-200 hover:border-indigo-200"
                                   }`}
                                 >
-                                  {/* Left visual accent bar */}
                                   <div className="absolute top-0 left-0 bottom-0 w-1.5 bg-emerald-500" />
-                                  <div className="flex items-center gap-3">
-                                    {/* Handle slider graphic */}
-                                    <div className="w-8 h-2.5 bg-slate-200 group-hover:bg-emerald-200 rounded-full flex items-center justify-center shadow-inner shrink-0 transition-colors">
-                                      <div className="w-4 h-0.5 bg-slate-400 group-hover:bg-emerald-500 rounded" />
-                                    </div>
+                                  <div className="p-4 pl-5 border-b border-slate-100 bg-slate-50/70 flex items-start justify-between gap-3">
                                     <div>
-                                      <h4 className="text-xs font-bold text-slate-800 group-hover:text-indigo-600 transition-colors truncate" title={drawer.name}>
+                                      <h4 className="text-xs font-bold text-slate-900 group-hover:text-indigo-600 transition-colors truncate" title={drawer.name}>
                                         {drawer.name}
                                       </h4>
-                                      <p className="text-[10px] text-slate-400">
-                                        {drawerBoxesCount} {drawerBoxesCount === 1 ? "box" : "boxes"} • {samplesCount} {samplesCount === 1 ? "sample" : "samples"}
+                                      <p className="text-[10px] text-slate-500 mt-1">
+                                        {drawerBoxes.length} box{drawerBoxes.length === 1 ? "" : "es"} • {drawerCapacity} slot{drawerCapacity === 1 ? "" : "s"}
                                       </p>
                                     </div>
-                                  </div>
-
-                                  <div className="flex items-center gap-2">
                                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                       <button
                                         onClick={(e) => {
@@ -5217,22 +5198,89 @@ export default function App() {
                                         <Trash2 className="h-3 w-3" />
                                       </button>
                                     </div>
-                                    <ArrowRight className="h-4 w-4 text-slate-400 group-hover:text-emerald-500 group-hover:translate-x-0.5 transition-all shrink-0" />
+                                  </div>
+
+                                  <div className="p-4 pl-5">
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                                      {drawerBoxes.length > 0 ? drawerBoxes.map(box => {
+                                        const isBoxActive = selectedBoxId === box.id;
+                                        return (
+                                          <div
+                                            key={box.id}
+                                            draggable={true}
+                                            onDragStart={(e) => {
+                                              setDraggedBoxId(box.id);
+                                              e.dataTransfer.setData("text/plain", JSON.stringify({ type: "box", id: box.id }));
+                                            }}
+                                            onDragEnd={clearBoxDragState}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setSelectedBoxId(box.id);
+                                            }}
+                                            className={`group/box relative rounded-xl border p-2.5 min-h-[92px] transition-all cursor-pointer shadow-3xs hover:shadow-xs ${
+                                              isBoxActive
+                                                ? "bg-indigo-600 text-white border-indigo-700"
+                                                : "bg-slate-50 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/20 text-slate-700"
+                                            }`}
+                                          >
+                                            <div className={`absolute top-0 left-0 bottom-0 w-1 rounded-l-xl ${isBoxActive ? "bg-white/70" : "bg-blue-500"}`} />
+                                            <div className="flex justify-between items-start gap-2 pl-1">
+                                              <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5 min-w-0">
+                                                  <BoxIcon className={`h-3.5 w-3.5 shrink-0 ${isBoxActive ? "text-blue-100" : "text-blue-500"}`} />
+                                                  <h5 className="text-[11px] font-bold truncate" title={box.name}>
+                                                    {box.name}
+                                                  </h5>
+                                                </div>
+                                                <p className={`text-[9px] mt-1 ${isBoxActive ? "text-blue-100" : "text-slate-400"}`}>
+                                                  Slot {typeof box.drawerSlot === "number" ? box.drawerSlot : "-"}
+                                                </p>
+                                              </div>
+                                              <div className="flex gap-0.5 opacity-0 group-hover/box:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                                                <button
+                                                  onClick={() => {
+                                                    setEditingStorageItem(box);
+                                                    setStorageModalMode("box");
+                                                    setStorageModalOpen(true);
+                                                  }}
+                                                  className={`p-0.5 rounded ${isBoxActive ? "hover:bg-indigo-700 text-indigo-200" : "hover:bg-slate-200 text-slate-400 hover:text-slate-700"}`}
+                                                >
+                                                  <Edit2 className="h-2.5 w-2.5" />
+                                                </button>
+                                                <button
+                                                  onClick={() => handleArchiveBox(box.id, box.name)}
+                                                  className={`p-0.5 rounded ${isBoxActive ? "hover:bg-indigo-700 text-indigo-200" : "hover:bg-red-50 text-slate-400 hover:text-red-600"}`}
+                                                >
+                                                  <Trash2 className="h-2.5 w-2.5" />
+                                                </button>
+                                              </div>
+                                            </div>
+
+                                            <div className="mt-3 pl-1 flex items-center justify-between text-[10px] font-semibold">
+                                              <span className={isBoxActive ? "text-blue-100" : "text-slate-500"}>
+                                                {getBoxSamplesCount(box.id)} sample{getBoxSamplesCount(box.id) === 1 ? "" : "s"}
+                                              </span>
+                                              <span className={isBoxActive ? "text-blue-100" : "text-indigo-500"}>
+                                                Open
+                                              </span>
+                                            </div>
+                                          </div>
+                                        );
+                                      }) : (
+                                        <div className="col-span-full rounded-xl border border-dashed border-slate-200 bg-slate-50/50 p-4 text-center text-[11px] text-slate-400">
+                                          No boxes in this drawer.
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    <div className="mt-3 flex items-center justify-between text-[10px] text-slate-400">
+                                      <span>{drawerBoxes.length} placed / {drawerCapacity} slots</span>
+                                      <span className="opacity-0 group-hover:opacity-100 transition-opacity">Click a box to open it</span>
+                                    </div>
                                   </div>
                                 </div>
                               );
                             })}
-                            <div
-                              onClick={() => {
-                                setEditingStorageItem(null);
-                                setStorageModalMode("drawer");
-                                setStorageModalOpen(true);
-                              }}
-                              className="flex items-center justify-center gap-1.5 border border-dashed border-slate-300 hover:border-indigo-400 bg-white hover:bg-indigo-50/10 rounded-lg p-3 transition-all duration-200 cursor-pointer text-slate-400 hover:text-indigo-600 text-center group"
-                            >
-                              <Plus className="h-4 w-4 text-slate-300 group-hover:text-indigo-500 group-hover:scale-110 transition-transform" />
-                              <span className="text-[10px] font-bold uppercase tracking-wider">Add Drawer Below</span>
-                            </div>
                           </div>
                         );
                       })()}
