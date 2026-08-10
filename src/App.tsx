@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { 
   Plus, 
   Search, 
@@ -139,6 +139,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [auditSearch, setAuditSearch] = useState("");
+  const backupRestoreInputRef = useRef<HTMLInputElement | null>(null);
 
   // Bulk selection/actions
   const [bulkSelectOpen, setBulkSelectOpen] = useState(false);
@@ -1215,9 +1216,28 @@ export default function App() {
     );
   };
 
-  // Helper for single click JSON export backup
-  const handleBackupExport = () => {
-    window.open("/api/export", "_blank");
+  // Helper for single click backup export
+  const handleBackupExport = async () => {
+    try {
+      const res = await authFetch("/api/export", { method: "GET" });
+      if (!res.ok) {
+        alert("Failed to export JSON backup.");
+        return;
+      }
+
+      const jsonBlob = await res.blob();
+      const jsonUrl = URL.createObjectURL(jsonBlob);
+      const jsonLink = document.createElement("a");
+      jsonLink.href = jsonUrl;
+      jsonLink.download = `lab_inventory_backup_${new Date().toISOString().split("T")[0]}.json`;
+      document.body.appendChild(jsonLink);
+      jsonLink.click();
+      document.body.removeChild(jsonLink);
+
+      handleCSVExport();
+    } catch {
+      alert("Failed to export backup files.");
+    }
   };
 
   const handleExportAuditTrailJSON = () => {
@@ -1357,8 +1377,13 @@ export default function App() {
       } catch (err) {
         alert("Failed to parse the backup JSON file. Make sure it's valid.");
       }
+      e.target.value = "";
     };
     reader.readAsText(file);
+  };
+
+  const triggerBackupRestorePicker = () => {
+    backupRestoreInputRef.current?.click();
   };
 
   // Quick active selections
@@ -3656,7 +3681,7 @@ export default function App() {
 
           <div className="relative group">
             <button
-              onClick={handleCSVExport}
+              onClick={handleBackupExport}
               className="px-3.5 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-xs hover:shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
@@ -3664,24 +3689,27 @@ export default function App() {
             </button>
             <div className="absolute right-0 mt-1 hidden group-hover:block bg-white border border-slate-200 rounded-lg shadow-xl text-left p-1 z-30 w-44">
               <button
+                onClick={handleBackupExport}
+                className="w-full text-left px-3 py-2 hover:bg-slate-50 rounded text-xs text-slate-700 flex items-center gap-1.5"
+              >
+                <Database className="h-3.5 w-3.5 text-slate-400" /> Export JSON backup
+              </button>
+              <button
                 onClick={handleCSVExport}
                 className="w-full text-left px-3 py-2 hover:bg-slate-50 rounded text-xs text-slate-700 flex items-center gap-1.5"
               >
                 <FileSpreadsheet className="h-3.5 w-3.5 text-slate-400" /> Export full CSV
               </button>
               <button
-                onClick={handleBackupExport}
+                onClick={triggerBackupRestorePicker}
                 className="w-full text-left px-3 py-2 hover:bg-slate-50 rounded text-xs text-slate-700 flex items-center gap-1.5"
               >
-                <Database className="h-3.5 w-3.5 text-slate-400" /> Export JSON backup
-              </button>
-              <label className="w-full text-left px-3 py-2 hover:bg-slate-50 rounded text-xs text-slate-700 flex items-center gap-1.5 cursor-pointer">
                 <Upload className="h-3.5 w-3.5 text-slate-400" />
                 <span>Import JSON backup</span>
-                <input type="file" accept=".json" onChange={handleBackupRestore} className="hidden" />
-              </label>
+              </button>
             </div>
           </div>
+          <input ref={backupRestoreInputRef} type="file" accept=".json" onChange={handleBackupRestore} className="hidden" />
         </div>
       </header>
 
