@@ -36,6 +36,36 @@ function sanitizeUsers(users: unknown): string[] {
   return cleaned.length ? Array.from(new Set(cleaned)) : DEFAULT_USERS;
 }
 
+function parseCreatedAtFromId(id: string): string | null {
+  const match = id.match(/-(\d{10,})(?:-|$)/);
+  if (!match) return null;
+  const timestamp = Number(match[1]);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
+function stampCreatedAt<T extends { id: string; createdAt?: string }>(entity: T): T {
+  if (entity.createdAt && !Number.isNaN(Date.parse(entity.createdAt))) {
+    return entity;
+  }
+
+  return {
+    ...entity,
+    createdAt: parseCreatedAtFromId(entity.id) || new Date().toISOString()
+  };
+}
+
+function normalizeInventoryTimestamps(state: InventoryState): InventoryState {
+  return {
+    ...state,
+    storageUnits: (state.storageUnits || []).map(stampCreatedAt),
+    shelves: (state.shelves || []).map(stampCreatedAt),
+    racks: (state.racks || []).map(stampCreatedAt),
+    drawers: (state.drawers || []).map(stampCreatedAt),
+    boxes: (state.boxes || []).map(stampCreatedAt),
+    samples: (state.samples || []).map(stampCreatedAt),
+  };
+}
+
 type SnapshotRecord = {
   id: string;
   logId?: string;
@@ -518,7 +548,7 @@ async function loadStateFromDisk(): Promise<InventoryState> {
     archivedSnapshots,
     1000
   );
-  return {
+  return normalizeInventoryTimestamps({
     version: typeof parsed.version === "number" ? parsed.version : 0,
     users: sanitizeUsers(parsed.users),
     storageUnits: parsed.storageUnits || [],
@@ -529,7 +559,7 @@ async function loadStateFromDisk(): Promise<InventoryState> {
     samples: parsed.samples || [],
     auditLogs: parsed.auditLogs || [],
     auditSnapshots: mergedSnapshots as InventoryState["auditSnapshots"]
-  };
+  });
 }
 
 /**
@@ -562,14 +592,15 @@ async function saveState(state: InventoryState): Promise<void> {
     if (!existsSync(DATA_DIR)) {
       await fs.mkdir(DATA_DIR, { recursive: true });
     }
+    const normalizedState = normalizeInventoryTimestamps(state);
     // Write the full state to disk for persistence / crash recovery.
     // The auditSnapshots in the on-disk file are kept lightweight (metadata
     // only — see createLightweightSnapshot below), so the file stays small
     // even though the in-memory state still carries full snapshots for
     // restore functionality.
     const diskState: InventoryState = {
-      ...state,
-      auditSnapshots: stripSnapshotPayloads(state.auditSnapshots)
+      ...normalizedState,
+      auditSnapshots: stripSnapshotPayloads(normalizedState.auditSnapshots)
     };
     await fs.writeFile(DATA_FILE, JSON.stringify(diskState, null, 2), "utf-8");
     const archivedSnapshots = await loadSnapshotArchive();
@@ -580,7 +611,7 @@ async function saveState(state: InventoryState): Promise<void> {
     );
     await saveSnapshotArchive(mergedArchive);
     // Update the in-memory cache so subsequent reads are instant.
-    cachedState = state;
+    cachedState = normalizedState;
   } catch (err) {
     console.error("Error saving inventory state:", err);
     throw err;
@@ -1679,8 +1710,9 @@ async function startServer() {
         // Append new storage hierarchy items (dedup by ID)
         const mergeArrays = <T extends { id: string }>(existing: T[], incoming?: T[]): T[] => {
           if (!incoming || incoming.length === 0) return existing;
-          const newIds = new Set(incoming.map(i => i.id));
-          return [...incoming, ...existing.filter(e => !newIds.has(e.id))];
+          const normalizedIncoming = incoming.map(item => stampCreatedAt(item as T & { createdAt?: string }));
+          const newIds = new Set(normalizedIncoming.map(i => i.id));
+          return [...normalizedIncoming, ...existing.filter(e => !newIds.has(e.id))];
         };
         return {
           ...state,
@@ -1837,6 +1869,7 @@ async function startServer() {
       importedState.auditLogs = importedState.auditLogs || [];
       importedState.auditSnapshots = importedState.auditSnapshots || [];
       importedState.users = sanitizeUsers(importedState.users);
+      const normalizedImportedState = normalizeInventoryTimestamps(importedState);
       // Add audit log for restore
       const now = new Date().toISOString();
       const restoreLog: AuditLog = {
@@ -1844,13 +1877,13 @@ async function startServer() {
         timestamp: now,
         user: req.query.user as string || "Anonymous Lab Member",
         action: "Database Restored",
-        description: `Database fully restored from backup file containing ${importedState.samples.length} samples.`
+        description: `Database fully restored from backup file containing ${normalizedImportedState.samples.length} samples.`
       };
-      importedState.auditLogs = [restoreLog, ...(importedState.auditLogs || [])];
-      importedState.version = 1; // Reset version after full restore
+      normalizedImportedState.auditLogs = [restoreLog, ...(normalizedImportedState.auditLogs || [])];
+      normalizedImportedState.version = 1; // Reset version after full restore
 
-      await saveState(importedState);
-      res.json({ success: true, state: importedState });
+      await saveState(normalizedImportedState);
+      res.json({ success: true, state: normalizedImportedState });
     } catch (err) {
       res.status(500).json({ error: "Failed to import backup data" });
     }

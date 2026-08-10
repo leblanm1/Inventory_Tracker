@@ -9,6 +9,7 @@ export interface StorageUnit {
   name: string;
   type: StorageType;
   isArchived?: boolean;
+  createdAt?: string;
 }
 
 export interface Shelf {
@@ -17,6 +18,7 @@ export interface Shelf {
   name: string;
   cols?: number | null; // number of slots/racks across the shelf
   isArchived?: boolean;
+  createdAt?: string;
 }
 
 export interface Rack {
@@ -28,6 +30,7 @@ export interface Rack {
   cols?: number | null; // columns/grid layout dimension for box slots
   shelfCol?: number | null; // column slot position on the shelf
   isArchived?: boolean;
+  createdAt?: string;
 }
 
 export interface Drawer {
@@ -38,6 +41,7 @@ export interface Drawer {
   name: string;
   boxCapacity?: number | null;
   isArchived?: boolean;
+  createdAt?: string;
 }
 
 export interface Box {
@@ -52,6 +56,7 @@ export interface Box {
   cols: number | null; // null if free-form box (not grid)
   shelfCol?: number | null; // column slot position on the shelf (if direct)
   isArchived?: boolean;
+  createdAt?: string;
 }
 
 export interface Sample {
@@ -136,6 +141,7 @@ export interface Sample {
   storageClass?: string;          // "flammable" | "corrosive" | "oxidizer" | "acid" | "base" | "light-sensitive" | "general"
   minStockLevel?: number;         // Reorder threshold
   reorderQty?: number;            // Suggested reorder quantity
+  createdAt?: string;
 }
 
 export interface AuditLog {

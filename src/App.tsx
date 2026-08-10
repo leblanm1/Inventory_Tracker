@@ -114,6 +114,18 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchPanelOpen, setSearchPanelOpen] = useState(false);
+  const [searchDetailOpen, setSearchDetailOpen] = useState(false);
+  const [searchKindFilters, setSearchKindFilters] = useState<Array<SearchResult["kind"]>>([
+    "sample",
+    "storage",
+    "shelf",
+    "rack",
+    "drawer",
+    "box"
+  ]);
+  const [searchDateFrom, setSearchDateFrom] = useState("");
+  const [searchDateTo, setSearchDateTo] = useState("");
+  const [searchSortMode, setSearchSortMode] = useState<"relevance" | "newest" | "oldest">("relevance");
   const [currentUser, setCurrentUser] = useState(() => {
     if (typeof window === "undefined") return DEFAULT_USERS[0];
     return window.localStorage.getItem(CURRENT_USER_STORAGE_KEY) || DEFAULT_USERS[0];
@@ -1643,6 +1655,101 @@ export default function App() {
     | { kind: "drawer"; drawer: Drawer; rack?: Rack; shelf?: Shelf; storage?: StorageUnit }
     | { kind: "box"; box: Box; drawer?: Drawer; rack?: Rack; shelf?: Shelf; storage?: StorageUnit };
 
+  const SEARCH_RESULT_KIND_LABELS: Record<SearchResult["kind"], string> = {
+    sample: "Sample",
+    storage: "Storage",
+    shelf: "Shelf",
+    rack: "Rack",
+    drawer: "Drawer",
+    box: "Box",
+  };
+
+  const getSearchResultTitle = (result: SearchResult) => {
+    if (result.kind === "sample") return result.sample.chemicalName || result.sample.chemicalId || "Sample";
+    if (result.kind === "storage") return result.storage.name;
+    if (result.kind === "shelf") return result.shelf.name;
+    if (result.kind === "rack") return result.rack.name;
+    if (result.kind === "drawer") return result.drawer.name;
+    return result.box.name;
+  };
+
+  const getSearchResultPath = (result: SearchResult) => {
+    if (result.kind === "sample") {
+      const parentBoxDetail = state.boxes.find(b => b.id === result.sample.boxId);
+      const parentDrawerDetail = state.drawers.find(d => d.id === result.sample.drawerId);
+      const parentRackDetail = state.racks.find(r => r.id === result.sample.rackId);
+      const parentShelfDetail = state.shelves.find(s => s.id === result.sample.shelfId);
+      const parentStorageDetail = state.storageUnits.find(u => u.id === result.sample.storageId);
+      return [parentStorageDetail?.name, parentShelfDetail?.name, parentRackDetail?.name || parentDrawerDetail?.name, parentBoxDetail?.name]
+        .filter(Boolean)
+        .join(" > ");
+    }
+
+    const storageName = result.kind === "storage" ? result.storage.name : result.storage?.name;
+    const shelfName = result.kind === "shelf" ? result.shelf.name : result.shelf?.name;
+    const rackName = result.kind === "rack" ? result.rack.name : result.rack?.name;
+    const drawerName = result.kind === "drawer" ? result.drawer.name : result.drawer?.name;
+    const boxName = result.kind === "box" ? result.box.name : undefined;
+
+    return [storageName, shelfName, rackName || drawerName, boxName]
+      .filter(Boolean)
+      .join(" > ");
+  };
+
+  const parseCreatedAtFromId = (id: string) => {
+    const matches = id.match(/-(\d{10,})(?:-|$)/);
+    if (!matches) return null;
+    const timestamp = Number(matches[1]);
+    return Number.isFinite(timestamp) ? timestamp : null;
+  };
+
+  const getSearchResultAddedAt = (result: SearchResult) => {
+    const dateValue = result.kind === "sample"
+      ? result.sample.createdAt || (result.sample as Sample & { id: string }).createdAt || null
+      : result.kind === "storage"
+        ? result.storage.createdAt || null
+        : result.kind === "shelf"
+          ? result.shelf.createdAt || null
+          : result.kind === "rack"
+            ? result.rack.createdAt || null
+            : result.kind === "drawer"
+              ? result.drawer.createdAt || null
+              : result.box.createdAt || null;
+
+    if (dateValue) {
+      const parsed = Date.parse(dateValue);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+
+    const id = result.kind === "sample"
+      ? result.sample.id
+      : result.kind === "storage"
+        ? result.storage.id
+        : result.kind === "shelf"
+          ? result.shelf.id
+          : result.kind === "rack"
+            ? result.rack.id
+            : result.kind === "drawer"
+              ? result.drawer.id
+              : result.box.id;
+
+    return parseCreatedAtFromId(id);
+  };
+
+  const openDetailedSearch = () => {
+    if (!searchQuery.trim()) return;
+    setSearchPanelOpen(false);
+    setSearchDetailOpen(true);
+  };
+
+  const toggleSearchKindFilter = (kind: SearchResult["kind"]) => {
+    setSearchKindFilters(prev => (
+      prev.includes(kind)
+        ? prev.filter(item => item !== kind)
+        : [...prev, kind]
+    ));
+  };
+
   // Universal Filter / Search logic — Fuse.js fuzzy search (review item 11)
   // Create memoized Fuse instances for each entity type. Threshold 0.4 gives
   // good typo tolerance without too many false positives.
@@ -1755,6 +1862,42 @@ export default function App() {
     state.drawers,
     searchQuery
   ]);
+
+  const detailedSearchResults = useMemo(() => {
+    const fromTimestamp = searchDateFrom ? new Date(`${searchDateFrom}T00:00:00`).getTime() : null;
+    const toTimestamp = searchDateTo ? new Date(`${searchDateTo}T23:59:59.999`).getTime() : null;
+
+    const filtered = searchResults.filter(result => {
+      if (!searchKindFilters.includes(result.kind)) return false;
+
+      const addedAt = getSearchResultAddedAt(result);
+      if (fromTimestamp !== null && (addedAt === null || addedAt < fromTimestamp)) return false;
+      if (toTimestamp !== null && (addedAt === null || addedAt > toTimestamp)) return false;
+
+      return true;
+    });
+
+    const withDate = filtered.map(result => ({ result, addedAt: getSearchResultAddedAt(result) }));
+
+    withDate.sort((left, right) => {
+      if (searchSortMode === "newest") {
+        return (right.addedAt || 0) - (left.addedAt || 0);
+      }
+      if (searchSortMode === "oldest") {
+        return (left.addedAt || 0) - (right.addedAt || 0);
+      }
+      return 0;
+    });
+
+    return withDate.map(entry => entry.result);
+  }, [searchResults, searchKindFilters, searchDateFrom, searchDateTo, searchSortMode]);
+
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchPanelOpen(false);
+      setSearchDetailOpen(false);
+    }
+  }, [searchQuery]);
 
   // Track samples mapped to the currently selected container (Shelf, Rack, Drawer, or Box)
   const currentViewSamples = useMemo(() => {
@@ -2176,13 +2319,19 @@ export default function App() {
     savedSamples.forEach(sampleItem => {
       const index = updatedSamples.findIndex(s => s.id === sampleItem.id);
       if (index >= 0) {
-        updatedSamples[index] = sampleItem;
+        updatedSamples[index] = {
+          ...updatedSamples[index],
+          ...sampleItem,
+        };
         logAct = savedSamples.length > 1 ? "Samples Updated" : "Sample Updated";
         logDesc = savedSamples.length > 1
           ? `Updated ${savedSamples.length} sample(s) in storage location.`
           : `Updated chemical data & coordinates for sample "${sampleItem.chemicalName}".`;
       } else {
-        updatedSamples.push(sampleItem);
+        updatedSamples.push({
+          ...sampleItem,
+          createdAt: sampleItem.createdAt || new Date().toISOString(),
+        });
       }
     });
 
@@ -2219,7 +2368,8 @@ export default function App() {
     } else {
       const newUnit: StorageUnit = {
         ...unit,
-        id: `store-${Date.now()}`
+        id: `store-${Date.now()}`,
+        createdAt: unit.createdAt || new Date().toISOString()
       };
       updatedUnits.push(newUnit);
       setSelectedStorageId(newUnit.id);
@@ -2269,7 +2419,8 @@ export default function App() {
     } else {
       const newShelf: Shelf = {
         ...shelfData,
-        id: `shelf-${Date.now()}`
+        id: `shelf-${Date.now()}`,
+        createdAt: shelfData.createdAt || new Date().toISOString()
       };
       updatedShelves.push(newShelf);
       setSelectedShelfId(newShelf.id);
@@ -2288,7 +2439,8 @@ export default function App() {
           rows: rackRows,
           cols: rackCols,
           shelfCol: idx + 1,
-          isArchived: false
+          isArchived: false,
+          createdAt: new Date().toISOString()
         }));
         updatedRacks = [...updatedRacks, ...autoRacks];
 
@@ -2300,7 +2452,8 @@ export default function App() {
             storageId: rackItem.storageId,
             name: toAlphabetLabel(drawerIdx),
             boxCapacity: drawerBoxCapacity,
-            isArchived: false
+            isArchived: false,
+            createdAt: new Date().toISOString()
           }))
         );
 
@@ -2332,7 +2485,8 @@ export default function App() {
             rows: rackRows,
             cols: rackCols,
             shelfCol: slot,
-            isArchived: false
+            isArchived: false,
+            createdAt: new Date().toISOString()
           }));
 
           updatedRacks = [...updatedRacks, ...autoRacks];
@@ -2345,7 +2499,8 @@ export default function App() {
               storageId: rackItem.storageId,
               name: toAlphabetLabel(drawerIdx),
               boxCapacity: drawerBoxCapacity,
-              isArchived: false
+              isArchived: false,
+              createdAt: new Date().toISOString()
             }))
           );
 
@@ -2423,7 +2578,8 @@ export default function App() {
             storageId: rackData.storageId,
             name: nextAvailableLabel(),
             boxCapacity: drawerBoxCapacity,
-            isArchived: false
+            isArchived: false,
+            createdAt: new Date().toISOString()
           }));
 
           updatedDrawers = [...updatedDrawers, ...autoDrawers];
@@ -2433,7 +2589,8 @@ export default function App() {
     } else {
       const newRack: Rack = {
         ...rackData,
-        id: `rack-${Date.now()}`
+        id: `rack-${Date.now()}`,
+        createdAt: rackData.createdAt || new Date().toISOString()
       };
       updatedRacks.push(newRack);
 
@@ -2448,7 +2605,8 @@ export default function App() {
           storageId: newRack.storageId,
           name: toAlphabetLabel(idx),
           boxCapacity: drawerBoxCapacity,
-          isArchived: false
+          isArchived: false,
+          createdAt: new Date().toISOString()
         }));
         updatedDrawers = [...updatedDrawers, ...autoDrawers];
         logDesc = `Created new rack: ${rackData.name} with ${drawerCount} auto-generated drawers (${autoDrawers.map(d => d.name).join(", ")}).`;
@@ -2495,7 +2653,8 @@ export default function App() {
       const newDrawer: Drawer = {
         ...drawer,
         boxCapacity: requestedCapacity,
-        id: `drawer-${Date.now()}`
+        id: `drawer-${Date.now()}`,
+        createdAt: drawer.createdAt || new Date().toISOString()
       };
       updatedDrawers.push(newDrawer);
     }
@@ -2580,7 +2739,8 @@ export default function App() {
     } else {
       const newBox: Box = {
         ...boxToSave,
-        id: `box-${Date.now()}`
+        id: `box-${Date.now()}`,
+        createdAt: boxToSave.createdAt || new Date().toISOString()
       };
       updatedBoxes.push(newBox);
       finalBox = newBox;
@@ -3453,7 +3613,7 @@ export default function App() {
               onKeyDown={e => {
                 if (e.key === "Enter" && searchQuery.trim()) {
                   e.preventDefault();
-                  setSearchPanelOpen(true);
+                  openDetailedSearch();
                 }
               }}
               placeholder="Search by Chemical ID, CAS, Plasmid, Location, or Lot Number..."
@@ -3564,6 +3724,14 @@ export default function App() {
                   </button>
                 );
               })}
+              <div className="p-2 bg-slate-50">
+                <button
+                  onClick={openDetailedSearch}
+                  className="w-full px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition-colors"
+                >
+                  Open detailed results
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -3712,6 +3880,124 @@ export default function App() {
           <input ref={backupRestoreInputRef} type="file" accept=".json" onChange={handleBackupRestore} className="hidden" />
         </div>
       </header>
+
+      {searchDetailOpen && searchQuery.trim() && (
+        <div className="fixed inset-x-0 top-16 bottom-0 z-40 bg-slate-50 border-t border-slate-200 overflow-hidden">
+          <div className="h-full flex flex-col">
+            <div className="bg-white/95 backdrop-blur border-b border-slate-200 px-4 lg:px-6 py-4 shadow-sm">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.28em] text-indigo-600 font-bold">Detailed Search</div>
+                  <h2 className="mt-1 text-lg font-extrabold text-slate-900">Results for “{searchQuery}”</h2>
+                  <p className="text-xs text-slate-500 mt-1">{detailedSearchResults.length} result(s) after filters</p>
+                </div>
+                <button
+                  onClick={() => setSearchDetailOpen(false)}
+                  className="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_auto] items-end">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Entity Type</div>
+                  <div className="flex flex-wrap gap-2">
+                    {(Object.keys(SEARCH_RESULT_KIND_LABELS) as Array<SearchResult["kind"]>).map(kind => (
+                      <button
+                        key={kind}
+                        onClick={() => toggleSearchKindFilter(kind)}
+                        className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
+                          searchKindFilters.includes(kind)
+                            ? "bg-indigo-600 text-white border-indigo-600"
+                            : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                        }`}
+                      >
+                        {SEARCH_RESULT_KIND_LABELS[kind]}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setSearchKindFilters(["sample", "storage", "shelf", "rack", "drawer", "box"])}
+                      className="px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200 transition-colors"
+                    >
+                      Select all
+                    </button>
+                  </div>
+                </div>
+
+                <label className="block">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Added From</div>
+                  <input
+                    type="date"
+                    value={searchDateFrom}
+                    onChange={e => setSearchDateFrom(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-hidden focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </label>
+
+                <label className="block">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Added To</div>
+                  <input
+                    type="date"
+                    value={searchDateTo}
+                    onChange={e => setSearchDateTo(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-hidden focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </label>
+
+                <label className="block">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Sort</div>
+                  <select
+                    value={searchSortMode}
+                    onChange={e => setSearchSortMode(e.target.value as typeof searchSortMode)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-hidden focus:ring-2 focus:ring-indigo-500/20"
+                  >
+                    <option value="relevance">Relevance</option>
+                    <option value="newest">Newest added</option>
+                    <option value="oldest">Oldest added</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-4 lg:px-6 py-4">
+              {detailedSearchResults.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">
+                  No results matched the selected filters.
+                </div>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                  {detailedSearchResults.map((result, idx) => {
+                    const addedAt = getSearchResultAddedAt(result);
+                    return (
+                      <button
+                        key={`${result.kind}-${idx}`}
+                        onClick={() => {
+                          handleSearchResultClick(result);
+                          setSearchDetailOpen(false);
+                          setSearchPanelOpen(false);
+                        }}
+                        className="text-left rounded-2xl border border-slate-200 bg-white p-4 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                              <span className="px-2 py-1 rounded-full bg-indigo-50 text-indigo-700">{SEARCH_RESULT_KIND_LABELS[result.kind]}</span>
+                              {addedAt ? <span>{new Date(addedAt).toLocaleDateString()}</span> : <span>Unknown date</span>}
+                            </div>
+                            <div className="mt-2 text-sm font-bold text-slate-900 truncate">{getSearchResultTitle(result)}</div>
+                            <div className="mt-1 text-xs text-slate-500 leading-relaxed">{getSearchResultPath(result) || "No location available"}</div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Body */}
       <main className="flex-1 flex overflow-hidden min-h-[calc(100vh-6rem)] relative">
