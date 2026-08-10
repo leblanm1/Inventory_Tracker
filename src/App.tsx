@@ -161,6 +161,9 @@ export default function App() {
   const [dragOverShelfId, setDragOverShelfId] = useState<string | null>(null);
   const [dragOverRackId, setDragOverRackId] = useState<string | null>(null);
   const [dragOverDrawerId, setDragOverDrawerId] = useState<string | null>(null);
+  const [draggedBoxId, setDraggedBoxId] = useState<string | null>(null);
+  const [dragOverBoxId, setDragOverBoxId] = useState<string | null>(null);
+  const [dragOverDrawerSlot, setDragOverDrawerSlot] = useState<number | null>(null);
   const [draggingHierarchyItem, setDraggingHierarchyItem] = useState<{
     type: "shelf" | "rack" | "drawer";
     id: string;
@@ -373,6 +376,178 @@ export default function App() {
   };
   const getBoxSamplesCount = (boxId: string) => {
     return state.samples.filter(s => s.boxId === boxId && !s.isArchived).length;
+  };
+
+  const readDragPayload = (e: React.DragEvent): { type: "rack" | "drawer" | "box" | "sample"; id: string } | null => {
+    const dragDataStr = e.dataTransfer.getData("text/plain");
+    if (!dragDataStr) return null;
+
+    try {
+      return JSON.parse(dragDataStr);
+    } catch {
+      return dragDataStr.length > 0 ? { type: "sample", id: dragDataStr } : null;
+    }
+  };
+
+  const clearBoxDragState = () => {
+    setDraggedBoxId(null);
+    setDragOverBoxId(null);
+    setDragOverDrawerSlot(null);
+  };
+
+  const getDrawerBoxesSortedBySlot = (drawerId: string) => {
+    return state.boxes
+      .filter(b => b.drawerId === drawerId && !b.isArchived)
+      .sort((a, b) => {
+        const aSlot = typeof a.drawerSlot === "number" ? a.drawerSlot : Number.MAX_SAFE_INTEGER;
+        const bSlot = typeof b.drawerSlot === "number" ? b.drawerSlot : Number.MAX_SAFE_INTEGER;
+        if (aSlot !== bSlot) return aSlot - bSlot;
+        return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+      });
+  };
+
+  const handleDropReorderBoxesInDrawer = async (targetBoxId: string, drawerId: string) => {
+    if (!draggedBoxId || draggedBoxId === targetBoxId) {
+      clearBoxDragState();
+      return;
+    }
+
+    const drawer = state.drawers.find(d => d.id === drawerId && !d.isArchived);
+    if (!drawer) {
+      clearBoxDragState();
+      return;
+    }
+
+    const orderedBoxes = getDrawerBoxesSortedBySlot(drawerId);
+    const fromIndex = orderedBoxes.findIndex(b => b.id === draggedBoxId);
+    const toIndex = orderedBoxes.findIndex(b => b.id === targetBoxId);
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+      clearBoxDragState();
+      return;
+    }
+
+    const reordered = [...orderedBoxes];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved);
+
+    const slotById = new Map<string, number>();
+    reordered.forEach((box, index) => {
+      slotById.set(box.id, index + 1);
+    });
+
+    const updatedBoxes = state.boxes.map(box => {
+      const newSlot = slotById.get(box.id);
+      if (box.drawerId === drawerId && newSlot) {
+        return { ...box, drawerSlot: newSlot };
+      }
+      return box;
+    });
+
+    clearBoxDragState();
+
+    await saveStateToServer(
+      { ...state, boxes: updatedBoxes },
+      "Drawer Boxes Reordered",
+      `Reordered boxes in drawer "${drawer.name}".`
+    );
+  };
+
+  const handleDropBoxOnDrawerSlot = async (e: React.DragEvent, drawerId: string, slotNum: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const dragPayload = readDragPayload(e);
+    if (!dragPayload || dragPayload.type !== "box") {
+      clearBoxDragState();
+      return;
+    }
+
+    const draggedBox = state.boxes.find(b => b.id === dragPayload.id && !b.isArchived);
+    const targetDrawer = state.drawers.find(d => d.id === drawerId && !d.isArchived);
+    if (!draggedBox || !targetDrawer) {
+      clearBoxDragState();
+      return;
+    }
+
+    const existingInSlot = state.boxes.find(
+      b =>
+        !b.isArchived &&
+        b.drawerId === drawerId &&
+        typeof b.drawerSlot === "number" &&
+        b.drawerSlot === slotNum
+    );
+
+    if (existingInSlot?.id === draggedBox.id) {
+      clearBoxDragState();
+      return;
+    }
+
+    const drawerCapacity = getDrawerCapacity(targetDrawer);
+    const boxesInDrawer = state.boxes.filter(b => !b.isArchived && b.drawerId === drawerId);
+    const movingIntoDrawer = draggedBox.drawerId !== drawerId;
+
+    if (movingIntoDrawer && !existingInSlot && boxesInDrawer.length >= drawerCapacity) {
+      alert(`Drawer "${targetDrawer.name}" is full (${drawerCapacity} slots).`);
+      clearBoxDragState();
+      return;
+    }
+
+    if (movingIntoDrawer && existingInSlot) {
+      alert("Target slot is occupied. Choose an empty slot or reorder boxes within the same drawer.");
+      clearBoxDragState();
+      return;
+    }
+
+    const draggedOldSlot = typeof draggedBox.drawerSlot === "number" ? draggedBox.drawerSlot : null;
+
+    const updatedBoxes = state.boxes.map(box => {
+      if (box.id === draggedBox.id) {
+        return {
+          ...box,
+          drawerId: targetDrawer.id,
+          rackId: targetDrawer.rackId,
+          shelfId: targetDrawer.shelfId,
+          storageId: targetDrawer.storageId,
+          drawerSlot: slotNum,
+          shelfCol: null
+        };
+      }
+
+      if (existingInSlot && box.id === existingInSlot.id && draggedBox.drawerId === drawerId) {
+        return {
+          ...box,
+          drawerSlot: draggedOldSlot
+        };
+      }
+
+      return box;
+    });
+
+    const updatedSamples = state.samples.map(sample => {
+      if (sample.boxId !== draggedBox.id) return sample;
+      return {
+        ...sample,
+        drawerId: targetDrawer.id,
+        rackId: targetDrawer.rackId,
+        shelfId: targetDrawer.shelfId,
+        storageId: targetDrawer.storageId
+      };
+    });
+
+    clearBoxDragState();
+
+    const actionName = movingIntoDrawer ? "Box Moved to Drawer Slot" : "Drawer Slot Updated";
+    const actionDesc = movingIntoDrawer
+      ? `Moved box "${draggedBox.name}" into drawer "${targetDrawer.name}" slot ${slotNum}.`
+      : existingInSlot
+      ? `Swapped box "${draggedBox.name}" with "${existingInSlot.name}" in drawer "${targetDrawer.name}".`
+      : `Moved box "${draggedBox.name}" to slot ${slotNum} in drawer "${targetDrawer.name}".`;
+
+    await saveStateToServer(
+      { ...state, boxes: updatedBoxes, samples: updatedSamples },
+      actionName,
+      actionDesc
+    );
   };
 
   function reorderActiveItemsWithinParent<T extends { id: string; isArchived?: boolean }>(
@@ -3674,7 +3849,7 @@ export default function App() {
 
                                               {rackDrawers.map(drawer => {
                                                 const isDrawerActive = selectedDrawerId === drawer.id;
-                                                const drawerBoxes = state.boxes.filter(b => b.drawerId === drawer.id && !b.isArchived);
+                                                const drawerBoxes = getDrawerBoxesSortedBySlot(drawer.id);
                                                 const isDrawerDragOver =
                                                   dragOverHierarchyItem?.type === "drawer" &&
                                                   dragOverHierarchyItem.id === drawer.id &&
@@ -3766,9 +3941,35 @@ export default function App() {
 
                                                         {drawerBoxes.map(box => {
                                                           const isBoxActive = selectedBoxId === box.id;
+                                                          const isBoxDragOver = dragOverBoxId === box.id;
                                                           return (
                                                             <div
                                                               key={box.id}
+                                                              draggable
+                                                              onDragStart={(e) => {
+                                                                setDraggedBoxId(box.id);
+                                                                e.dataTransfer.effectAllowed = "move";
+                                                                e.dataTransfer.setData("text/plain", JSON.stringify({ type: "box", id: box.id }));
+                                                              }}
+                                                              onDragEnd={clearBoxDragState}
+                                                              onDragOver={(e) => {
+                                                                if (draggedBoxId && draggedBoxId !== box.id) {
+                                                                  e.preventDefault();
+                                                                  e.stopPropagation();
+                                                                  e.dataTransfer.dropEffect = "move";
+                                                                  setDragOverBoxId(box.id);
+                                                                }
+                                                              }}
+                                                              onDragLeave={() => {
+                                                                if (isBoxDragOver) {
+                                                                  setDragOverBoxId(null);
+                                                                }
+                                                              }}
+                                                              onDrop={(e) => {
+                                                                e.preventDefault();
+                                                                e.stopPropagation();
+                                                                void handleDropReorderBoxesInDrawer(box.id, drawer.id);
+                                                              }}
                                                               onClick={(e) => {
                                                                 e.stopPropagation();
                                                                 setSelectedBoxId(box.id);
@@ -3777,7 +3978,7 @@ export default function App() {
                                                                 isBoxActive
                                                                   ? "bg-indigo-600 text-white font-semibold"
                                                                   : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-                                                              }`}
+                                                              } ${isBoxDragOver ? "ring-1 ring-indigo-300 bg-indigo-50/40" : ""}`}
                                                             >
                                                               <span className="truncate flex items-center gap-0.5">
                                                                 <BoxIcon className="h-2 w-2 shrink-0" />
@@ -4562,9 +4763,26 @@ export default function App() {
                                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                                   {Array.from({ length: drawerCapacity }, (_, idx) => idx + 1).map(slotNum => {
                                     const slotBox = slottedBoxMap.get(slotNum);
+                                    const isSlotDragOver = dragOverDrawerSlot === slotNum;
                                     return (
                                       <button
                                         key={slotNum}
+                                        onDragOver={(e) => {
+                                          const payload = readDragPayload(e);
+                                          if (payload?.type === "box") {
+                                            e.preventDefault();
+                                            e.dataTransfer.dropEffect = "move";
+                                            setDragOverDrawerSlot(slotNum);
+                                          }
+                                        }}
+                                        onDragLeave={() => {
+                                          if (isSlotDragOver) {
+                                            setDragOverDrawerSlot(null);
+                                          }
+                                        }}
+                                        onDrop={(e) => {
+                                          void handleDropBoxOnDrawerSlot(e, currentDrawer.id, slotNum);
+                                        }}
                                         onClick={() => {
                                           if (slotBox) {
                                             setSelectedBoxId(slotBox.id);
@@ -4572,7 +4790,7 @@ export default function App() {
                                           }
                                           handleOpenNewBoxModal(slotNum);
                                         }}
-                                        className={`text-left rounded-md border px-2 py-1.5 text-[10px] transition-colors ${slotBox ? "bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100" : "bg-white border-slate-200 text-slate-400"}`}
+                                        className={`text-left rounded-md border px-2 py-1.5 text-[10px] transition-colors ${slotBox ? "bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100" : "bg-white border-slate-200 text-slate-400"} ${isSlotDragOver ? "ring-2 ring-indigo-300 border-indigo-300 bg-indigo-100/50" : ""}`}
                                       >
                                         <div className="font-bold">Slot {slotNum}</div>
                                         <div className="truncate">{slotBox ? slotBox.name : "Empty"}</div>
@@ -4596,8 +4814,10 @@ export default function App() {
                                 onClick={() => setSelectedBoxId(box.id)}
                                 draggable={true}
                                 onDragStart={(e) => {
+                                  setDraggedBoxId(box.id);
                                   e.dataTransfer.setData("text/plain", JSON.stringify({ type: "box", id: box.id }));
                                 }}
+                                onDragEnd={clearBoxDragState}
                                 className="group relative flex flex-col justify-between bg-white hover:bg-indigo-50/10 border border-slate-200 hover:border-indigo-300 rounded-xl p-4 shadow-3xs hover:shadow-xs transition-all duration-200 cursor-pointer h-32 overflow-hidden"
                               >
                                 <div className="absolute top-0 left-0 bottom-0 w-1 bg-blue-500" />
