@@ -2955,19 +2955,19 @@ export default function App() {
   };
 
   // Bulk Import Panel Completion handler
-  const handleBulkImportComplete = (importedData: {
+  const handleBulkImportComplete = async (importedData: {
     samples: Sample[];
     newStorageUnits: StorageUnit[];
     newShelves: Shelf[];
     newRacks: Rack[];
     newDrawers: Drawer[];
     newBoxes: Box[];
-  }) => {
+  }): Promise<boolean> => {
     const mergeArrays = <T extends { id: string }>(existing: T[], incoming: T[]): T[] => {
       const newIds = new Set(incoming.map(i => i.id));
       return [...incoming, ...existing.filter(e => !newIds.has(e.id))];
     };
-    apiMutate(
+    const result = await apiMutate(
       "/api/bulk-import",
       "POST",
       {
@@ -2990,7 +2990,13 @@ export default function App() {
         samples: mergeArrays(state.samples, importedData.samples)
       }
     );
+    if (!result) {
+      alert("Bulk import could not be committed to the server. Your review plan is still available; please retry.");
+      return false;
+    }
+
     setShowBulkImport(false);
+    return true;
   };
 
   // Drag and Drop implementations for Grid slots

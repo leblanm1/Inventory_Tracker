@@ -3,6 +3,15 @@ import { Sample, StorageUnit, Shelf, Box, Rack, Drawer } from "../types.js";
 import { parseCSV, HEADER_TO_FIELD_MAP, getFieldLabel } from "../utils.js";
 import { Upload, FileSpreadsheet, Check, AlertCircle, Play, Sparkles } from "lucide-react";
 
+type ImportPlan = {
+  samples: Sample[];
+  newStorageUnits: StorageUnit[];
+  newShelves: Shelf[];
+  newRacks: Rack[];
+  newDrawers: Drawer[];
+  newBoxes: Box[];
+};
+
 interface BulkImportPanelProps {
   storageUnits: StorageUnit[];
   shelves: Shelf[];
@@ -16,7 +25,7 @@ interface BulkImportPanelProps {
     newRacks: Rack[];
     newDrawers: Drawer[];
     newBoxes: Box[];
-  }) => void;
+  }) => Promise<boolean>;
 }
 
 export default function BulkImportPanel({
@@ -32,6 +41,7 @@ export default function BulkImportPanel({
   const [headers, setHeaders] = useState<string[]>([]);
   const [fileName, setFileName] = useState("");
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
+  const [pendingPlan, setPendingPlan] = useState<ImportPlan | null>(null);
 
   // Default target if none specified in spreadsheet
   const [defaultStorageId, setDefaultStorageId] = useState("");
@@ -69,6 +79,7 @@ export default function BulkImportPanel({
       });
 
       setPreviewRows(parsedRows);
+      setPendingPlan(null);
       setStatusMsg({
         type: "success",
         text: `Successfully parsed ${parsedRows.length} rows! Verify the mapping below and click 'Commit Import'.`
@@ -97,6 +108,43 @@ export default function BulkImportPanel({
   const handleCommit = () => {
     if (previewRows.length === 0) return;
 
+    const plan = buildImportPlan();
+
+    if (!plan) {
+      return;
+    }
+
+    setPendingPlan(plan);
+
+    setStatusMsg({
+      type: "info",
+      text:
+        `Review before import: ${plan.samples.length} sample(s), ` +
+        `${plan.newStorageUnits.length} storage unit(s), ${plan.newShelves.length} shelf(s), ` +
+        `${plan.newRacks.length} rack(s), ${plan.newDrawers.length} drawer(s), and ${plan.newBoxes.length} box(es) will be created. ` +
+        `Click 'Confirm Create' to apply.`
+    });
+  };
+
+  const buildImportPlan = (): ImportPlan | null => {
+    if (previewRows.length === 0) {
+      setStatusMsg({ type: "error", text: "Nothing to import. Parse data first." });
+      return null;
+    }
+
+    const normalizeHeader = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const parsePositiveInt = (value: string): number | null => {
+      const parsed = Number.parseInt(String(value || "").trim(), 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    };
+    const firstNonEmpty = (...values: Array<string | null | undefined>): string => {
+      for (const value of values) {
+        const trimmed = String(value || "").trim();
+        if (trimmed) return trimmed;
+      }
+      return "";
+    };
+
     // Create tracking maps for dynamic storage creation
     const dynamicUnits: StorageUnit[] = [];
     const dynamicShelves: Shelf[] = [];
@@ -109,6 +157,19 @@ export default function BulkImportPanel({
     const importedSamples: Sample[] = [];
 
     previewRows.forEach((row, index) => {
+      const rowByNormalizedHeader: Record<string, string> = {};
+      headers.forEach((header) => {
+        rowByNormalizedHeader[normalizeHeader(header)] = String(row[header] || "").trim();
+      });
+
+      const readRowAlias = (...aliases: string[]) => {
+        for (const alias of aliases) {
+          const value = rowByNormalizedHeader[normalizeHeader(alias)];
+          if (value) return value;
+        }
+        return "";
+      };
+
       // Create empty metadata
       const sampleMeta: Record<string, any> = {};
       
@@ -152,7 +213,11 @@ export default function BulkImportPanel({
 
       // 1. Storage unit resolution
       let targetStorageId = defaultStorageId;
-      let sheetStorageName = sampleMeta.freezerNameStr || sampleMeta.freezerIdStr;
+      let sheetStorageName = firstNonEmpty(
+        readRowAlias("freezer", "freezername", "storage", "storageunit"),
+        sampleMeta.freezerNameStr,
+        sampleMeta.freezerIdStr
+      );
       
       // Fallback to "Location" column
       if (!sheetStorageName && sampleMeta.location) {
@@ -177,12 +242,32 @@ export default function BulkImportPanel({
 
       // 2. Shelf level resolution
       let targetShelfId = defaultShelfId;
-      let sheetShelfName = sampleMeta.shelfNameStr || sampleMeta.shelfIdStr;
+      let sheetShelfName = firstNonEmpty(
+        readRowAlias("shelf", "shelfname", "level"),
+        sampleMeta.shelfNameStr,
+        sampleMeta.shelfIdStr
+      );
       
       // Intelligent sub-location mapping for spreadsheets without explicit Freezer/Shelf/Rack/Drawer columns
-      let resolvedRackName = sampleMeta.rackName || "";
-      let resolvedDrawerName = sampleMeta.drawerNameStr || sampleMeta.drawerIdStr || "";
-      let resolvedBoxName = sampleMeta.boxNameStr || sampleMeta.boxIdStr || "";
+      let resolvedRackName = firstNonEmpty(
+        readRowAlias("rack", "rackname"),
+        sampleMeta.rackName,
+        sampleMeta.rackIdStr,
+        sampleMeta.rackId
+      );
+      let resolvedDrawerName = firstNonEmpty(
+        readRowAlias("drawer", "drawername"),
+        sampleMeta.drawerNameStr,
+        sampleMeta.drawerIdStr
+      );
+      let resolvedBoxName = firstNonEmpty(
+        readRowAlias("box", "boxname"),
+        sampleMeta.boxNameStr,
+        sampleMeta.boxIdStr
+      );
+      const resolvedDrawerSlot = parsePositiveInt(
+        firstNonEmpty(readRowAlias("slot", "drawerslot", "slotnumber", "position"))
+      );
 
       if (!sheetShelfName && sampleMeta.subLocation) {
         const subLocLower = sampleMeta.subLocation.toLowerCase();
@@ -228,7 +313,7 @@ export default function BulkImportPanel({
 
       // 3. Rack resolution
       let targetRackId = "";
-      const sheetRackName = resolvedRackName || sampleMeta.rackName || sampleMeta.rackId;
+      const sheetRackName = firstNonEmpty(resolvedRackName, sampleMeta.rackName, sampleMeta.rackIdStr, sampleMeta.rackId);
       if (targetShelfId && sheetRackName) {
         let matched = racks.find(r => 
           r.shelfId === targetShelfId && 
@@ -253,7 +338,7 @@ export default function BulkImportPanel({
 
       // 4. Drawer resolution
       let targetDrawerId = "";
-      const sheetDrawerName = resolvedDrawerName || sampleMeta.drawerNameStr || sampleMeta.drawerIdStr;
+      const sheetDrawerName = firstNonEmpty(resolvedDrawerName, sampleMeta.drawerNameStr, sampleMeta.drawerIdStr);
       if (targetRackId && sheetDrawerName) {
         let matched = drawers.find(d => 
           d.rackId === targetRackId && 
@@ -279,7 +364,7 @@ export default function BulkImportPanel({
 
       // 5. Box container resolution
       let targetBoxId: string | null = null;
-      const sheetBoxName = resolvedBoxName || sampleMeta.boxNameStr || sampleMeta.boxIdStr;
+      const sheetBoxName = firstNonEmpty(resolvedBoxName, sampleMeta.boxNameStr, sampleMeta.boxIdStr);
 
       if (targetShelfId && sheetBoxName) {
         let matched = boxes.find(b => 
@@ -287,12 +372,14 @@ export default function BulkImportPanel({
           b.name.toLowerCase() === sheetBoxName.toLowerCase() && 
           b.rackId === (targetRackId || null) &&
           b.drawerId === (targetDrawerId || null) &&
+          (targetDrawerId ? (b.drawerSlot || null) === (resolvedDrawerSlot || null) : true) &&
           !b.isArchived
         ) || dynamicBoxes.find(b => 
           b.shelfId === targetShelfId && 
           b.name.toLowerCase() === sheetBoxName.toLowerCase() &&
           b.rackId === (targetRackId || null) &&
-          b.drawerId === (targetDrawerId || null)
+          b.drawerId === (targetDrawerId || null) &&
+          (targetDrawerId ? (b.drawerSlot || null) === (resolvedDrawerSlot || null) : true)
         );
 
         if (!matched) {
@@ -307,6 +394,7 @@ export default function BulkImportPanel({
             storageId: targetStorageId,
             rackId: targetRackId || null,
             drawerId: targetDrawerId || null,
+            drawerSlot: targetDrawerId ? resolvedDrawerSlot : null,
             name: sheetBoxName,
             rows: isGrid ? 9 : null, // Default 9x9 if grid coordinates are present
             cols: isGrid ? 9 : null
@@ -324,7 +412,24 @@ export default function BulkImportPanel({
       if (isNaN(finalRow)) finalRow = null as any;
       if (isNaN(finalCol)) finalCol = null as any;
 
-      if (isBoxRow) {
+      const hasExplicitSampleFields = Boolean(
+        firstNonEmpty(
+          sampleMeta.chemicalName,
+          sampleMeta.itemName,
+          sampleMeta.casNumber,
+          sampleMeta.qty,
+          sampleMeta.itemType,
+          sampleMeta.notes,
+          sampleMeta.plasmidName,
+          sampleMeta.organism,
+          sampleMeta.gene
+        )
+      );
+      const looksLikeContainerOnlyRow = Boolean(
+        sheetStorageName || sheetShelfName || sheetRackName || sheetDrawerName || sheetBoxName
+      ) && !hasExplicitSampleFields;
+
+      if (isBoxRow || looksLikeContainerOnlyRow) {
         return;
       }
 
@@ -411,23 +516,48 @@ export default function BulkImportPanel({
       importedSamples.push(mappedSample);
     });
 
-    onImportComplete({
+    return {
       samples: importedSamples,
       newStorageUnits: dynamicUnits,
       newShelves: dynamicShelves,
       newRacks: dynamicRacks,
       newDrawers: dynamicDrawers,
       newBoxes: dynamicBoxes
+    };
+  };
+
+  const handleConfirmCommit = async () => {
+    if (!pendingPlan) {
+      setStatusMsg({ type: "error", text: "No pending import plan found. Click 'Commit Import' first." });
+      return;
+    }
+
+    const didCommit = await onImportComplete({
+      samples: pendingPlan.samples,
+      newStorageUnits: pendingPlan.newStorageUnits,
+      newShelves: pendingPlan.newShelves,
+      newRacks: pendingPlan.newRacks,
+      newDrawers: pendingPlan.newDrawers,
+      newBoxes: pendingPlan.newBoxes
     });
+
+    if (!didCommit) {
+      setStatusMsg({
+        type: "error",
+        text: "Import commit failed on the server. Nothing was finalized. Please try again."
+      });
+      return;
+    }
 
     // Reset
     setInputText("");
     setPreviewRows([]);
     setHeaders([]);
     setFileName("");
+    setPendingPlan(null);
     setStatusMsg({
       type: "success",
-      text: `Import complete! Successfully imported ${importedSamples.length} samples and created ${dynamicUnits.length} storage units, ${dynamicShelves.length} shelf layers, ${dynamicRacks.length} racks, ${dynamicDrawers.length} drawers, and ${dynamicBoxes.length} box containers.`
+      text: `Import complete! Successfully imported ${pendingPlan.samples.length} samples and created ${pendingPlan.newStorageUnits.length} storage units, ${pendingPlan.newShelves.length} shelf layers, ${pendingPlan.newRacks.length} racks, ${pendingPlan.newDrawers.length} drawers, and ${pendingPlan.newBoxes.length} box containers.`
     });
   };
 
@@ -570,6 +700,81 @@ export default function BulkImportPanel({
               <Check className="h-4 w-4" /> Commit Import
             </button>
           </div>
+
+          {pendingPlan && (
+            <div className="p-4 bg-blue-50 border border-blue-100 rounded-xl space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold text-blue-800 uppercase tracking-wider">Import Plan Review</p>
+                  <p className="text-[11px] text-blue-700">
+                    Confirm these creations before writing to inventory.
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      setPendingPlan(null);
+                      setStatusMsg({ type: "info", text: "Import plan cleared. Re-run Commit Import to preview again." });
+                    }}
+                    className="px-3 py-1.5 text-[11px] font-bold border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConfirmCommit}
+                    className="px-3 py-1.5 text-[11px] font-bold bg-blue-700 text-white rounded-lg hover:bg-blue-800"
+                  >
+                    Confirm Create
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-[11px]">
+                <div className="rounded-lg bg-white border border-blue-100 px-2 py-1.5">
+                  <span className="font-bold text-blue-900">Storage Units:</span> {pendingPlan.newStorageUnits.length}
+                </div>
+                <div className="rounded-lg bg-white border border-blue-100 px-2 py-1.5">
+                  <span className="font-bold text-blue-900">Shelves:</span> {pendingPlan.newShelves.length}
+                </div>
+                <div className="rounded-lg bg-white border border-blue-100 px-2 py-1.5">
+                  <span className="font-bold text-blue-900">Racks:</span> {pendingPlan.newRacks.length}
+                </div>
+                <div className="rounded-lg bg-white border border-blue-100 px-2 py-1.5">
+                  <span className="font-bold text-blue-900">Drawers:</span> {pendingPlan.newDrawers.length}
+                </div>
+                <div className="rounded-lg bg-white border border-blue-100 px-2 py-1.5">
+                  <span className="font-bold text-blue-900">Boxes:</span> {pendingPlan.newBoxes.length}
+                </div>
+                <div className="rounded-lg bg-white border border-blue-100 px-2 py-1.5">
+                  <span className="font-bold text-blue-900">Samples:</span> {pendingPlan.samples.length}
+                </div>
+              </div>
+
+              {pendingPlan.newBoxes.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[11px] font-bold text-blue-900">Boxes to Create (first 12):</p>
+                  <div className="max-h-40 overflow-y-auto rounded-lg bg-white border border-blue-100 divide-y divide-blue-50">
+                    {pendingPlan.newBoxes.slice(0, 12).map((box) => {
+                      const drawer = [...drawers, ...pendingPlan.newDrawers].find(d => d.id === box.drawerId);
+                      const rack = [...racks, ...pendingPlan.newRacks].find(r => r.id === box.rackId);
+                      const shelf = [...shelves, ...pendingPlan.newShelves].find(s => s.id === box.shelfId);
+                      const storage = [...storageUnits, ...pendingPlan.newStorageUnits].find(u => u.id === box.storageId);
+                      return (
+                        <div key={box.id} className="px-2 py-1.5 text-[11px] text-slate-700">
+                          <span className="font-semibold text-slate-900">{box.name}</span>
+                          <span className="text-slate-500"> in {storage?.name || "Unknown"} / {shelf?.name || "Unknown"} / {rack?.name || "No Rack"} / {drawer?.name || "No Drawer"}</span>
+                          {typeof box.drawerSlot === "number" && <span className="text-blue-700"> (Slot {box.drawerSlot})</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {pendingPlan.newBoxes.length > 12 && (
+                    <p className="text-[10px] text-blue-700">Showing 12 of {pendingPlan.newBoxes.length} boxes.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Mapping visualization */}
           <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl space-y-2">
