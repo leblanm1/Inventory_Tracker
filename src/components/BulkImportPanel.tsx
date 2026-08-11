@@ -364,9 +364,23 @@ export default function BulkImportPanel({
 
       // 5. Box container resolution
       let targetBoxId: string | null = null;
+      const providedBoxId = firstNonEmpty(readRowAlias("boxid"), sampleMeta.boxIdStr);
+
+      if (providedBoxId) {
+        const existingById = boxes.find((b) => b.id === providedBoxId && !b.isArchived);
+        if (existingById) {
+          // Trust explicit Box ID from import rows when present.
+          targetBoxId = existingById.id;
+          targetStorageId = existingById.storageId;
+          targetShelfId = existingById.shelfId;
+          targetRackId = existingById.rackId || "";
+          targetDrawerId = existingById.drawerId || "";
+        }
+      }
+
       const sheetBoxName = firstNonEmpty(resolvedBoxName, sampleMeta.boxNameStr, sampleMeta.boxIdStr);
 
-      if (targetShelfId && sheetBoxName) {
+      if (!targetBoxId && targetShelfId && sheetBoxName) {
         let matched = boxes.find(b => 
           b.shelfId === targetShelfId && 
           b.name.toLowerCase() === sheetBoxName.toLowerCase() && 

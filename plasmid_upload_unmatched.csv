@@ -1,0 +1,137 @@
+Plasmid Name,Placement,Box,Tube,Reason
+pET Duet-1,None,,,No primary or secondary box number provided
+Y.pseudotuberulosis PmrI in pMS122,None,,,No primary or secondary box number provided
+Y.ps PmrI  C term in pMS 122,None,,,No primary or secondary box number provided
+chicken GCAP1,None,,,No primary or secondary box number provided
+human GCAP3,None,,,No primary or secondary box number provided
+zebrafish GCAP3,None,,,No primary or secondary box number provided
+GCAP1-GC1 fusion in pFastBac,None,,,No primary or secondary box number provided
+GCAP1-GC2 fusion in pFastBac,None,,,No primary or secondary box number provided
+GCAP2-GC1 fusion in pFastBac,None,,,No primary or secondary box number provided
+GCAP2-GC2 fusion in pFastBac,None,,,No primary or secondary box number provided
+chicken GCAP1 with G6S mutation,None,,,No primary or secondary box number provided
+pET41b modified with his-tev-NcoI,None,,,No primary or secondary box number provided
+modified pUCP-Nde,None,,,No primary or secondary box number provided
+modified pUCP-Nco,None,,,No primary or secondary box number provided
+E.coli PmrI N-term in pMS6,None,,,No primary or secondary box number provided
+Ps.aer. PmrI N-term.,None,,,No primary or secondary box number provided
+S.th PmrI N-terminus,None,,,No primary or secondary box number provided
+Y.ps N-term PmrI,None,,,No primary or secondary box number provided
+Y98C G6S in pET15b,None,,,No primary or secondary box number provided
+CaMKII beta in pMS 224,None,,,No primary or secondary box number provided
+CaMKII gamma B in pMS 224,None,,,No primary or secondary box number provided
+CaMKII delta A in pMS 224,None,,,No primary or secondary box number provided
+CaMKII delta C in pMS 224,None,,,No primary or secondary box number provided
+SS-His-FLBamA(R366A)+SS-FLBamD-FLAG/HA Tag,Primary,131,1305,Primary box number not found in Box Locations
+SopE2 FL in pMS 1251,None,,,No primary or secondary box number provided
+Crystal SptP in pMS 1251,None,,,No primary or secondary box number provided
+Inactive Protealysin in pMS 1251 (Double Aldehyde),None,,,No primary or secondary box number provided
+"OmpLA T43C, R258C",None,,,No primary or secondary box number provided
+"OmpLA I41C, M264C",None,,,No primary or secondary box number provided
+"OmpLA I41C, R258C mature",None,,,No primary or secondary box number provided
+"OmpLA T43C, R258C",None,,,No primary or secondary box number provided
+SptP Crystal in pMS 1480,None,,,No primary or secondary box number provided
+SopE2 Crystal in pMS 1480,None,,,No primary or secondary box number provided
+NleC Crystal in pMS 1480,None,,,No primary or secondary box number provided
+SptP Crystal in pMS 984,None,,,No primary or secondary box number provided
+SptP in pMS 984,None,,,No primary or secondary box number provided
+SopE2 Crystal in pMS 984,None,,,No primary or secondary box number provided
+SopE2 in pMS 984,None,,,No primary or secondary box number provided
+Alpha 3D in 1480,None,,,No primary or secondary box number provided
+BamA cysless with Aldehyde Tag,None,,,No primary or secondary box number provided
+YopH in pMS 1480 made with Gibson YBBR-ddFLN4-YopH-Xmod-Dockerin,None,,,No primary or secondary box number provided
+PTP1B in pMS 1480 made with Gibson YBBR-ddFLN4-YopH-Xmod-Dockerin,None,,,No primary or secondary box number provided
+"OmpLA T43C, G260C",None,,,No primary or secondary box number provided
+"OmpLA I41C, G260C",None,,,No primary or secondary box number provided
+"OmpLA I41C, G262C",None,,,No primary or secondary box number provided
+tOmpA K4M (SDM of pMS 760),None,,,No primary or secondary box number provided
+tOmpA K13M (SDM of pMS 760),None,,,No primary or secondary box number provided
+tOmpA K65M (SDM of pMS 760),None,,,No primary or secondary box number provided
+tOmpA K74M (SDM of pMS 760),None,,,No primary or secondary box number provided
+tOmpA K83M (SDM of pMS 760),None,,,No primary or secondary box number provided
+tOmpA R104M (SDM of pMS 760),None,,,No primary or secondary box number provided
+tOmpA K108M (SDM of pMS 760),None,,,No primary or secondary box number provided
+tOmpA K114M (SDM of pMS 760),None,,,No primary or secondary box number provided
+tOmpA R157M (SDM of pMS 760),None,,,No primary or secondary box number provided
+OmpX A14C (SDM of pMS 1228),None,,,No primary or secondary box number provided
+OmpX Q15C (SDM of pMS 1228),None,,,No primary or secondary box number provided
+OmpX G16C (SDM of pMS 1228),None,,,No primary or secondary box number provided
+OmpX Q17C (SDM of pMS 1228),None,,,No primary or secondary box number provided
+OmpX M18C (SDM of pMS 1228),None,,,No primary or secondary box number provided
+"OmpX 2 Cys ECL V1 (A14C/V137C, SDM of pMS 1794)",None,,,No primary or secondary box number provided
+"OmpX 2 Cys ECL V2 (Q15C/D136C, SDM of pMS 1795)",None,,,No primary or secondary box number provided
+"OmpX 2 Cys ECL V3 (G16C/V135C, SDM of pMS 1796)",None,,,No primary or secondary box number provided
+"OmpX 2 Cys ECL V4 (Q17C/S134C, SDM of pMS 1797)",None,,,No primary or secondary box number provided
+"OmpX 2 Cys ECL V5 (M18C/R133C, SDM of pMS 1798)",None,,,No primary or secondary box number provided
+PgbP in pRSETA,None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R36E (in pET/pMS 629),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R36M (in pET/pMS 629),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R160E (in pET/pMS 629),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R160M (in pET/pMS 629),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R162E (in pET/pMS 629),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R162M (in pET/pMS 629),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R160W (in pET/pMS 629),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R36E (in pZS21),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R36M (in pZS21),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R160E (in pZS21),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R160M (in pZS21),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R162E (in pZS21),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R162M (in pZS21),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R160W (in pZS21),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R36W (in pET/pMS 629),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R162W (in pET/pMS 629),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R36W (in pZS21),None,,,No primary or secondary box number provided
+E. coli FL BamA-6His R162W (in pZS21),None,,,No primary or secondary box number provided
+His-SUMO-NleC crystal frag-Intein-Chitin Binding Domain (pMS 1623+ c-terminal Intein-CBD),None,,,No primary or secondary box number provided
+BamD L124K (in pZS21),None,,,No primary or secondary box number provided
+BamD L124D (in pZS21),None,,,No primary or secondary box number provided
+BamA E470K (in pMS 1224),None,,,No primary or secondary box number provided
+BAM (BamA E470K) in pMS 1289,None,,,No primary or secondary box number provided
+BAM (?BamC) in pMS 1289,None,,,No primary or secondary box number provided
+BAM (BamA ?P1) in pMS 1289,None,,,No primary or secondary box number provided
+BAM (BamA ?P1-2) in pMS 1289,None,,,No primary or secondary box number provided
+BAM (BamA ?P1-3) in pMS 1289,None,,,No primary or secondary box number provided
+"BamA-6His (-BamBCDE, in pMS 1289)",None,,,No primary or secondary box number provided
+"BamA-6His E470K (-BamBCDE, in pMS1289)",None,,,No primary or secondary box number provided
+BamADE in pMS 1289,None,,,No primary or secondary box number provided
+BamAD in pMS 1289 (8xHis on BamD),None,,,No primary or secondary box number provided
+BamA-His ?P1-3 in pZS21,None,,,No primary or secondary box number provided
+BamAB in pMS 1289 (8xHis on BamB),None,,,No primary or secondary box number provided
+BamA-6His (?P1-3) in pMS 1289,None,,,No primary or secondary box number provided
+BamA-6His (?P1-4) in pMS 1289,None,,,No primary or secondary box number provided
+BamA-6His (?P1-5) in pMS 1289,None,,,No primary or secondary box number provided
+"FL ArnA 4x Mutant F488L, P490I, W493T, G543L in pMS 127",None,,,No primary or secondary box number provided
+"FL ArnA 3x Mutant P490I, W493T, G543L in pMS 127",None,,,No primary or secondary box number provided
+"FL ArnA 2x Mutant F488A, P490I in pMS 127",None,,,No primary or secondary box number provided
+FL ArnA 1x Mutant P490I in pMS 127,None,,,No primary or secondary box number provided
+pWSK29 (pMS-40) with KanR cassette from pKD4 (pMS-183),None,,,No primary or secondary box number provided
+pNIC- AVITAG-CTH10STII- -GG (addgene 215805) - C-term AviTag-Tev-His10-TwinStrepTag,None,,,No primary or secondary box number provided
+pNIC-NHSTIIT-AVITAG-GG (addgene 215802) - N-term 6xHis-TwinStrepTag-TEV-AviTag,None,,,No primary or secondary box number provided
+ArnA FL - AviTag-TEV-His10-TwinStrep_.dna,None,,,No primary or secondary box number provided
+His6-TwinStrep-TEV-AviTag-FL ArnA.dna,None,,,No primary or secondary box number provided
+ArnC AviTag-TEV-His10-TwinStrep.dna,None,,,No primary or secondary box number provided
+His6-TwinStrep-TEV-AviTag ArnC.dna,None,,,No primary or secondary box number provided
+nmEptA AviTag-TEV-His10-TwinStrep.dna,None,,,No primary or secondary box number provided
+His6-TwinStrep-TEV-AviTag nmEptA_.dna,None,,,No primary or secondary box number provided
+ArnA C-term - AviTag-TEV-His10-TwinStrep_.dna,None,,,No primary or secondary box number provided
+pMS1859-TSSopE2-SopE2CD-FLAG-cyaA,None,,,No primary or secondary box number provided
+pMS1859-TSSopE2-SopE2CD-FLAG-cyaA-SicP,None,,,No primary or secondary box number provided
+pMS1859-TSSptP-SptPCD-FLAG-cyaA-SicP,None,,,No primary or secondary box number provided
+pMS1859-TSSptP-eGFP-FLAG-cyaA-SicP,None,,,No primary or secondary box number provided
+pMS1859-TSSptP-NleCCD-FLAG-cyaA-SicP,None,,,No primary or secondary box number provided
+pMS1859-TSSptP-ProtealysinFL-FLAG-cyaA-SicP,None,,,No primary or secondary box number provided
+pMS1859-TSSopE2-SopE2CD-FLAG-cyaA-InvB,None,,,No primary or secondary box number provided
+pMS1859-TSSopE2-NleCCD-FLAG-cyaA-InvB,None,,,No primary or secondary box number provided
+pMS1859-TSSopE2-ProtealysinFL-FLAG-cyaA-InvB,None,,,No primary or secondary box number provided
+pCON1-TSSopE2-SopE2CD-FLAG-cyaA,None,,,No primary or secondary box number provided
+pCON1-TSSopE2-SopE2CD,None,,,No primary or secondary box number provided
+pCON1-TSSopE2-GFP-FLAG-cyaA,None,,,No primary or secondary box number provided
+nmEptA(S210-R544)-6xHis,None,,,No primary or secondary box number provided
+solEptA_T280A_AviTag_TEV_His10_TwinStrep.gb,None,,,No primary or secondary box number provided
+solEptA_T280A_His6.gb,None,,,No primary or secondary box number provided
+FLeptA_T280A_AviTag_TEV_His10_TwinStrep.gb,None,,,No primary or secondary box number provided
+FLeptA_T280A_His6.gb,None,,,No primary or secondary box number provided
+nmEptA(1-44_S176-R544)-6xHis,None,,,No primary or secondary box number provided
+nmEptA(1-44_S176-R544)- AviTag-TEV-His10-TwinStrep.dna,None,,,No primary or secondary box number provided
+nmEptA(1-44_S210-R544)-6xHis,None,,,No primary or secondary box number provided
+nmEptA(1-44_S210-R544)- AviTag-TEV-His10-TwinStrep.dna,None,,,No primary or secondary box number provided
