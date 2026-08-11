@@ -2840,6 +2840,14 @@ export default function App() {
     setSampleModalOpen(true);
   };
 
+  const handleOpenEditSampleModal = (sample: Sample) => {
+    setSelectedSampleId(sample.id);
+    setEditingSample(sample);
+    setSampleDefaultRow(null);
+    setSampleDefaultCol(null);
+    setSampleModalOpen(true);
+  };
+
   const handleOpenNewBoxModal = (drawerSlot: number | null = null) => {
     if (currentDrawer) {
       setSelectedStorageId(currentDrawer.storageId);
@@ -5115,6 +5123,11 @@ export default function App() {
                                     }
                                     handleOpenNewSampleAtGridCell(rowNum, colNum);
                                   }}
+                                  onDoubleClick={() => {
+                                    if (slotSample) {
+                                      handleOpenEditSampleModal(slotSample);
+                                    }
+                                  }}
                                   className={`relative aspect-square min-h-[56px] border rounded-md flex flex-col items-center justify-center cursor-pointer transition-all p-1 ${bgClass}`}
                                   title={slotSample ? `${slotSample.chemicalName} (Qty: ${slotSample.qty} ${slotSample.units})${slotSample.expiresOn ? ` | Expires: ${slotSample.expiresOn}` : ""}${isLowStock(slotSample) ? " | LOW STOCK" : ""}` : `Empty slot Row ${rowNum}, Col ${colNum}`}
                                 >
@@ -5214,6 +5227,7 @@ export default function App() {
                                 <div
                                   key={sample.id}
                                   onClick={() => setSelectedSampleId(sample.id)}
+                                  onDoubleClick={() => handleOpenEditSampleModal(sample)}
                                   className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
                                     isSelected 
                                       ? "bg-indigo-600 text-white border-indigo-700 shadow-md scale-[0.99]" 
@@ -5450,6 +5464,7 @@ export default function App() {
                                 <div
                                   key={sample.id}
                                   onClick={() => setSelectedSampleId(sample.id)}
+                                  onDoubleClick={() => handleOpenEditSampleModal(sample)}
                                   className={`p-3 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
                                     isSelected 
                                       ? "bg-indigo-600 text-white border-indigo-700 shadow-md scale-[0.99]" 
@@ -5747,6 +5762,7 @@ export default function App() {
                                 <div
                                   key={sample.id}
                                   onClick={() => setSelectedSampleId(sample.id)}
+                                  onDoubleClick={() => handleOpenEditSampleModal(sample)}
                                   className={`p-3 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
                                     isSelected 
                                       ? "bg-indigo-600 text-white border-indigo-700 shadow-md scale-[0.99]" 
@@ -5957,6 +5973,7 @@ export default function App() {
                                     <tr 
                                       key={sample.id} 
                                       onClick={() => setSelectedSampleId(sample.id)}
+                                      onDoubleClick={() => handleOpenEditSampleModal(sample)}
                                       className={`hover:bg-slate-50/60 cursor-pointer transition-colors ${isSelected ? "bg-indigo-50/40" : ""}`}
                                     >
                                       <td className="py-3 px-4 font-bold text-slate-800">{sample.chemicalName}</td>
@@ -6010,7 +6027,7 @@ export default function App() {
                                           )}
                                         </div>
                                       </td>
-                                      <td className="py-3 px-4" onClick={(e) => e.stopPropagation()}>
+                                      <td className="py-3 px-4" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
                                         <div className="flex items-center gap-2">
                                           {isLoose ? (
                                             <select
@@ -6051,8 +6068,7 @@ export default function App() {
                                           
                                           <button
                                             onClick={() => {
-                                              setEditingSample(sample);
-                                              setSampleModalOpen(true);
+                                              handleOpenEditSampleModal(sample);
                                             }}
                                             className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-indigo-600 cursor-pointer"
                                             title="Edit Details"
@@ -6606,6 +6622,7 @@ export default function App() {
                                           <div
                                             key={sample.id}
                                             onClick={() => setSelectedSampleId(sample.id)}
+                                            onDoubleClick={() => handleOpenEditSampleModal(sample)}
                                             className={`p-3 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
                                               isSelected 
                                                 ? "bg-indigo-600 text-white border-indigo-700 shadow-md scale-[0.99]" 
@@ -6981,6 +6998,7 @@ export default function App() {
                                 <div
                                   key={sample.id}
                                   onClick={() => setSelectedSampleId(sample.id)}
+                                  onDoubleClick={() => handleOpenEditSampleModal(sample)}
                                   className={`p-3 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
                                     isSelected 
                                       ? "bg-indigo-600 text-white border-indigo-700 shadow-md scale-[0.99]" 
@@ -7143,7 +7161,7 @@ export default function App() {
           allSamples={state.samples}
           auditLogs={state.auditLogs}
           locationString={inspectedSample ? getSampleLocationString(inspectedSample) : ""}
-          onEdit={() => inspectedSample && setEditingSample(inspectedSample)}
+          onEdit={() => inspectedSample && handleOpenEditSampleModal(inspectedSample)}
           onDeplete={handleDepleteSample}
           onArchive={handleArchiveSample}
           onUndoLastChange={handleUndoLastChange}
