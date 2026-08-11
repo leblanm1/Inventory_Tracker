@@ -3784,10 +3784,10 @@ export default function App() {
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Inspector toggle — mobile/tablet only */}
+          {/* Inspector toggle */}
           <button
             onClick={() => setInspectorOpen(!inspectorOpen)}
-            className="xl:hidden p-2 rounded-lg hover:bg-slate-100 text-slate-600"
+            className="p-2 rounded-lg hover:bg-slate-100 text-slate-600"
             aria-label="Toggle inspector"
             title="Toggle sample inspector"
           >
@@ -7109,10 +7109,10 @@ export default function App() {
           />
         )}
         <div className={`
-          shrink-0
-          fixed xl:static inset-y-0 right-0 z-20 xl:z-auto
-          transition-transform duration-200
-          ${inspectorOpen ? "translate-x-0" : "translate-x-full xl:translate-x-0"}
+          shrink-0 overflow-hidden
+          fixed xl:relative inset-y-0 right-0 z-20 xl:z-auto
+          transition-transform xl:transition-[width] duration-200
+          ${inspectorOpen ? "translate-x-0 xl:w-80" : "translate-x-full xl:translate-x-0 xl:w-0"}
         `}>
         <SampleInspector
           inspectedSample={inspectedSample}
