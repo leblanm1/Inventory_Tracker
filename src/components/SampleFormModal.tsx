@@ -300,15 +300,16 @@ export default function SampleFormModal({
     const finalBox = boxes.find(b => b.id === finalBoxId);
     const requestedQty = Math.max(1, Math.floor(Number(formData.qty) || 1));
     const isGridBox = Boolean(finalBox && finalBox.rows && finalBox.cols);
+    const sampleQty = Math.max(1, Math.floor(Number(formData.qty) || 1));
 
-    const buildSampleBase = (): Sample => ({
+    const buildSampleBase = (qty: number = sampleQty): Sample => ({
       ...(formData as Sample),
       storageId: selectedStorage,
       shelfId: selectedShelf,
       rackId: selectedRack || null,
       drawerId: selectedDrawer || null,
       boxId: finalBoxId,
-      qty: 1,
+      qty,
       chemicalName: formData.chemicalName.trim(),
       casNumber: formData.casNumber?.trim() || "",
       itemType: formData.itemType?.trim() || "Sample",
@@ -355,6 +356,7 @@ export default function SampleFormModal({
 
         const savedSample: Sample = {
           ...buildSampleBase(),
+          qty: sampleQty,
           id: sample?.id || `sample-${Date.now()}`,
           row: startRow,
           col: startCol,
@@ -392,7 +394,7 @@ export default function SampleFormModal({
       }
 
       const savedSamples: Sample[] = allocatedPositions.map((pos, index) => ({
-        ...buildSampleBase(),
+        ...buildSampleBase(1),
         id: sample?.id && index === 0 ? sample.id : `sample-${Date.now()}-${index + 1}`,
         row: pos.row,
         col: pos.col,
@@ -404,6 +406,7 @@ export default function SampleFormModal({
 
     const savedSample: Sample = {
       ...buildSampleBase(),
+      qty: sampleQty,
       id: sample?.id || `sample-${Date.now()}`,
       boxId: finalBoxId,
       row: finalBox && finalBox.rows && finalBox.cols ? Number(formData.row) : null,

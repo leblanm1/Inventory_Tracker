@@ -159,6 +159,57 @@ async function appendImmutableBackupManifest(backupPath: string, content: string
   }
 }
 
+async function pruneImmutableBackupManifest(removedFiles: string[]): Promise<void> {
+  try {
+    if (!removedFiles.length || !existsSync(IMMUTABLE_BACKUP_MANIFEST)) return;
+    const removed = new Set(removedFiles.map(file => path.basename(file)));
+    const raw = await fs.readFile(IMMUTABLE_BACKUP_MANIFEST, "utf-8");
+    const filtered = raw
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .filter(line => {
+        try {
+          const parsed = JSON.parse(line) as { file?: string };
+          return !parsed.file || !removed.has(parsed.file);
+        } catch {
+          return true;
+        }
+      })
+      .join("\n");
+    await fs.writeFile(IMMUTABLE_BACKUP_MANIFEST, filtered ? `${filtered}\n` : "", "utf-8");
+  } catch (err) {
+    console.error("Error pruning immutable backup manifest:", err);
+  }
+}
+
+async function cleanupOldPointInTimeBackups(retainCount = 25): Promise<void> {
+  try {
+    if (!existsSync(IMMUTABLE_BACKUP_DIR)) return;
+    const entries = await fs.readdir(IMMUTABLE_BACKUP_DIR, { withFileTypes: true });
+    const preImportFiles = entries
+      .filter(entry => entry.isFile() && entry.name.startsWith("inventory-pre-bulk-import-") && (entry.name.endsWith(".json") || entry.name.endsWith(".xlsx")))
+      .map(entry => entry.name)
+      .sort();
+
+    const grouped = new Map<string, string[]>();
+    for (const fileName of preImportFiles) {
+      const base = fileName.replace(/\.(json|xlsx)$/, "");
+      const current = grouped.get(base) || [];
+      current.push(fileName);
+      grouped.set(base, current);
+    }
+
+    const backups = Array.from(grouped.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    if (backups.length <= retainCount) return;
+
+    const toRemove = backups.slice(0, backups.length - retainCount).flatMap(([, files]) => files);
+    await Promise.all(toRemove.map(fileName => fs.unlink(path.join(IMMUTABLE_BACKUP_DIR, fileName)).catch(() => undefined)));
+    await pruneImmutableBackupManifest(toRemove.map(fileName => path.join(IMMUTABLE_BACKUP_DIR, fileName)));
+  } catch (err) {
+    console.error("Error cleaning up old pre-import backups:", err);
+  }
+}
+
 async function ensureDailyImmutableBackup(): Promise<boolean> {
   try {
     await migrateLegacyDataIfNeeded();
@@ -1790,6 +1841,7 @@ async function startServer() {
           samples: mergeArrays(state.samples, body.samples)
         };
       });
+      void cleanupOldPointInTimeBackups();
       res.json({ success: true, backup: preImportBackup, ...result.delta });
     } catch (err) {
       if (!handleMutateError(err, res)) {

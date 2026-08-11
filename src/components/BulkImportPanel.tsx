@@ -499,6 +499,7 @@ export default function BulkImportPanel({
         mutations: sampleMeta.mutations || "",
         vector: sampleMeta.vector || "",
         markers: sampleMeta.markers || "",
+        antibioticResistance: sampleMeta.antibioticResistance || "",
         hosts: sampleMeta.hosts || "",
         notebookRef: sampleMeta.notebookRef || "",
         source: sampleMeta.source || "",

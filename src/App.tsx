@@ -1658,6 +1658,8 @@ export default function App() {
     | { kind: "drawer"; drawer: Drawer; rack?: Rack; shelf?: Shelf; storage?: StorageUnit }
     | { kind: "box"; box: Box; drawer?: Drawer; rack?: Rack; shelf?: Shelf; storage?: StorageUnit };
 
+  type SampleSearchResult = Extract<SearchResult, { kind: "sample" }>;
+
   const SEARCH_RESULT_KIND_LABELS: Record<SearchResult["kind"], string> = {
     sample: "Sample",
     storage: "Storage",
@@ -1668,35 +1670,45 @@ export default function App() {
   };
 
   const getSearchResultTitle = (result: SearchResult) => {
-    if (result.kind === "sample") return result.sample.chemicalName || result.sample.chemicalId || "Sample";
-    if (result.kind === "storage") return result.storage.name;
-    if (result.kind === "shelf") return result.shelf.name;
-    if (result.kind === "rack") return result.rack.name;
-    if (result.kind === "drawer") return result.drawer.name;
-    return result.box.name;
+    switch (result.kind) {
+      case "sample":
+        return result.sample.chemicalName || result.sample.chemicalId || "Sample";
+      case "storage":
+        return result.storage.name;
+      case "shelf":
+        return result.shelf.name;
+      case "rack":
+        return result.rack.name;
+      case "drawer":
+        return result.drawer.name;
+      case "box":
+        return result.box.name;
+    }
   };
 
   const getSearchResultPath = (result: SearchResult) => {
-    if (result.kind === "sample") {
-      const parentBoxDetail = state.boxes.find(b => b.id === result.sample.boxId);
-      const parentDrawerDetail = state.drawers.find(d => d.id === result.sample.drawerId);
-      const parentRackDetail = state.racks.find(r => r.id === result.sample.rackId);
-      const parentShelfDetail = state.shelves.find(s => s.id === result.sample.shelfId);
-      const parentStorageDetail = state.storageUnits.find(u => u.id === result.sample.storageId);
-      return [parentStorageDetail?.name, parentShelfDetail?.name, parentRackDetail?.name || parentDrawerDetail?.name, parentBoxDetail?.name]
-        .filter(Boolean)
-        .join(" > ");
+    switch (result.kind) {
+      case "sample": {
+        const parentBoxDetail = state.boxes.find(b => b.id === result.sample.boxId);
+        const parentDrawerDetail = state.drawers.find(d => d.id === result.sample.drawerId);
+        const parentRackDetail = state.racks.find(r => r.id === result.sample.rackId);
+        const parentShelfDetail = state.shelves.find(s => s.id === result.sample.shelfId);
+        const parentStorageDetail = state.storageUnits.find(u => u.id === result.sample.storageId);
+        return [parentStorageDetail?.name, parentShelfDetail?.name, parentRackDetail?.name || parentDrawerDetail?.name, parentBoxDetail?.name]
+          .filter(Boolean)
+          .join(" > ");
+      }
+      case "storage":
+        return result.storage.name;
+      case "shelf":
+        return [result.storage?.name, result.shelf.name].filter(Boolean).join(" > ");
+      case "rack":
+        return [result.storage?.name, result.shelf?.name, result.rack.name].filter(Boolean).join(" > ");
+      case "drawer":
+        return [result.storage?.name, result.shelf?.name, result.rack?.name, result.drawer.name].filter(Boolean).join(" > ");
+      case "box":
+        return [result.storage?.name, result.shelf?.name, result.rack?.name || result.drawer?.name, result.box.name].filter(Boolean).join(" > ");
     }
-
-    const storageName = result.kind === "storage" ? result.storage.name : result.storage?.name;
-    const shelfName = result.kind === "shelf" ? result.shelf.name : result.shelf?.name;
-    const rackName = result.kind === "rack" ? result.rack.name : result.rack?.name;
-    const drawerName = result.kind === "drawer" ? result.drawer.name : result.drawer?.name;
-    const boxName = result.kind === "box" ? result.box.name : undefined;
-
-    return [storageName, shelfName, rackName || drawerName, boxName]
-      .filter(Boolean)
-      .join(" > ");
   };
 
   const parseCreatedAtFromId = (id: string) => {
@@ -1707,34 +1719,44 @@ export default function App() {
   };
 
   const getSearchResultAddedAt = (result: SearchResult) => {
-    const dateValue = result.kind === "sample"
-      ? result.sample.createdAt || (result.sample as Sample & { id: string }).createdAt || null
-      : result.kind === "storage"
-        ? result.storage.createdAt || null
-        : result.kind === "shelf"
-          ? result.shelf.createdAt || null
-          : result.kind === "rack"
-            ? result.rack.createdAt || null
-            : result.kind === "drawer"
-              ? result.drawer.createdAt || null
-              : result.box.createdAt || null;
+    const dateValue = (() => {
+      switch (result.kind) {
+        case "sample":
+          return result.sample.createdAt || null;
+        case "storage":
+          return result.storage.createdAt || null;
+        case "shelf":
+          return result.shelf.createdAt || null;
+        case "rack":
+          return result.rack.createdAt || null;
+        case "drawer":
+          return result.drawer.createdAt || null;
+        case "box":
+          return result.box.createdAt || null;
+      }
+    })();
 
     if (dateValue) {
       const parsed = Date.parse(dateValue);
       if (Number.isFinite(parsed)) return parsed;
     }
 
-    const id = result.kind === "sample"
-      ? result.sample.id
-      : result.kind === "storage"
-        ? result.storage.id
-        : result.kind === "shelf"
-          ? result.shelf.id
-          : result.kind === "rack"
-            ? result.rack.id
-            : result.kind === "drawer"
-              ? result.drawer.id
-              : result.box.id;
+    const id = (() => {
+      switch (result.kind) {
+        case "sample":
+          return result.sample.id;
+        case "storage":
+          return result.storage.id;
+        case "shelf":
+          return result.shelf.id;
+        case "rack":
+          return result.rack.id;
+        case "drawer":
+          return result.drawer.id;
+        case "box":
+          return result.box.id;
+      }
+    })();
 
     return parseCreatedAtFromId(id);
   };
@@ -1798,12 +1820,12 @@ export default function App() {
     const query = searchQuery.trim();
     if (!query) return [];
 
-    const fuseSampleMatches: SearchResult[] = sampleFuse
+    const fuseSampleMatches: SampleSearchResult[] = sampleFuse
       .search(query)
       .map(result => ({ kind: "sample" as const, sample: result.item }));
 
     const normalizedQuery = query.toLowerCase().replace(/\s+/g, "");
-    const directIdMatches: SearchResult[] = state.samples
+    const directIdMatches: SampleSearchResult[] = state.samples
       .filter(s => !s.isArchived)
       .filter(s => {
         const normalizedId = (s.chemicalId || "").toLowerCase().replace(/\s+/g, "");
@@ -1811,7 +1833,7 @@ export default function App() {
       })
       .map(sample => ({ kind: "sample" as const, sample }));
 
-    const sampleMatchesById = new Map<string, SearchResult>();
+    const sampleMatchesById = new Map<string, SampleSearchResult>();
     [...directIdMatches, ...fuseSampleMatches].forEach(match => {
       sampleMatchesById.set(match.sample.id, match);
     });

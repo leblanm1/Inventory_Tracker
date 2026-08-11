@@ -11,6 +11,24 @@ import { Sample } from "./types.js";
 
 export type ExpiryStatus = "expired" | "critical" | "warning" | "soon" | "ok" | "none";
 
+function parseInventoryDate(value: string): Date | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const dateOnlyMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnlyMatch) {
+    const year = Number(dateOnlyMatch[1]);
+    const month = Number(dateOnlyMatch[2]);
+    const day = Number(dateOnlyMatch[3]);
+    const localDate = new Date(year, month - 1, day);
+    return Number.isNaN(localDate.getTime()) ? null : localDate;
+  }
+
+  const parsed = new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 /**
  * Returns the expiry status for a sample based on its expiresOn date.
  * - expired: past the expiry date
@@ -24,8 +42,8 @@ export function getExpiryStatus(sample: Sample): ExpiryStatus {
   if (!sample.expiresOn) return "none";
   const now = new Date();
   now.setHours(0, 0, 0, 0);
-  const expiry = new Date(sample.expiresOn);
-  if (isNaN(expiry.getTime())) return "none";
+  const expiry = parseInventoryDate(sample.expiresOn);
+  if (!expiry) return "none";
   expiry.setHours(0, 0, 0, 0);
 
   const diffMs = expiry.getTime() - now.getTime();
@@ -73,8 +91,8 @@ export function getExpiryLabel(status: ExpiryStatus): string {
 
 export function getDaysUntilExpiry(sample: Sample): number | null {
   if (!sample.expiresOn) return null;
-  const expiry = new Date(sample.expiresOn);
-  if (isNaN(expiry.getTime())) return null;
+  const expiry = parseInventoryDate(sample.expiresOn);
+  if (!expiry) return null;
   const now = new Date();
   now.setHours(0, 0, 0, 0);
   expiry.setHours(0, 0, 0, 0);

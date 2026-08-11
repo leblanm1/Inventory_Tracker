@@ -308,7 +308,7 @@ export default function SampleInspector({
               </div>
             ))
           ) : (
-            <p className="text-xs text-slate-400 italic text-center py-6">No audit logs logged yet.</p>
+            <p className="text-xs text-slate-400 italic text-center py-6">No audit logs yet.</p>
           )}
         </div>
       </div>

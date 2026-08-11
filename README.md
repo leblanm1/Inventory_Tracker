@@ -201,6 +201,8 @@ Every `POST /api/bulk-import` request creates a full pre-import backup before an
 
 These files are written to `immutable-backups/`, marked read-only, and added to `manifest.jsonl` with hashes. If backup creation fails, the import is rejected and no data is changed.
 
+To keep the backup directory from growing without bound, the server retains the most recent 25 pre-import backup pairs and prunes older pairs automatically.
+
 ### Manual Backup (any OS)
 
 Create today's immutable backup without starting the web server:
