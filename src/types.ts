@@ -106,6 +106,7 @@ export interface Sample {
   mutations: string;
   vector: string;
   markers: string;
+  antibioticResistance?: string;
   hosts: string;
   notebookRef: string;
   source: string;

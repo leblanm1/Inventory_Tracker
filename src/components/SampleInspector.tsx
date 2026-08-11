@@ -40,6 +40,16 @@ export default function SampleInspector({
   onUndoLastChange,
   onShowFullTrail,
 }: SampleInspectorProps) {
+  const isPlasmidSeriesSample = inspectedSample
+    ? /^pms/i.test((inspectedSample.chemicalName || "").trim())
+      || /plasmid/i.test((inspectedSample.itemType || "").trim())
+      || Boolean((inspectedSample.plasmidName || "").trim())
+    : false;
+
+  const antibioticResistanceLabel = inspectedSample
+    ? (inspectedSample.antibioticResistance || inspectedSample.markers || "").trim()
+    : "";
+
   return (
     <aside className="w-80 bg-white border-l border-slate-200 flex flex-col shrink-0">
       {/* Sample Inspector Panel */}
@@ -62,6 +72,18 @@ export default function SampleInspector({
               <label className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Chemical / Sample Name</label>
               <p className="text-xs font-bold text-slate-800">{inspectedSample.chemicalName}</p>
             </div>
+
+            {isPlasmidSeriesSample && (
+              <div className="p-3 rounded-lg border border-rose-200 bg-rose-50 space-y-1">
+                <div className="text-[10px] uppercase tracking-wider font-extrabold text-rose-700">Plasmid Antibiotic Resistance</div>
+                <div className="text-sm font-extrabold text-rose-900">
+                  {antibioticResistanceLabel || "Not set"}
+                </div>
+                {!antibioticResistanceLabel && (
+                  <p className="text-[10px] text-rose-700/80">Add this in Edit Info for quick plasmid screening.</p>
+                )}
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-3.5">
               <div>
@@ -206,6 +228,7 @@ export default function SampleInspector({
                 <label className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Plasmid Details</label>
                 <div className="p-2 bg-slate-50 rounded border border-slate-100 text-[11px] space-y-0.5 text-slate-600">
                   <div><span className="font-semibold text-slate-800">Plasmid:</span> {inspectedSample.plasmidName}</div>
+                  {antibioticResistanceLabel && <div><span className="font-semibold text-slate-800">Antibiotic Resistance:</span> {antibioticResistanceLabel}</div>}
                   {inspectedSample.organism && <div><span className="font-semibold text-slate-800">Organism:</span> {inspectedSample.organism}</div>}
                   {inspectedSample.vector && <div><span className="font-semibold text-slate-800">Vector:</span> {inspectedSample.vector}</div>}
                   {inspectedSample.gene && <div><span className="font-semibold text-slate-800">Gene:</span> {inspectedSample.gene}</div>}
