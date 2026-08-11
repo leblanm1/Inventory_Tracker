@@ -316,7 +316,13 @@ Useful parameters:
 Manual run of the same maintenance flow:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/morning-maintenance.ps1 -RepoPath "C:\Inventory_Tracker" -Port 3000
+powershell -ExecutionPolicy Bypass -File scripts/morning-maintenance.ps1 -Port 3000
+```
+
+If you move this repository to a new folder, re-run task registration so Task Scheduler updates its absolute script path:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/register-daily-backup-task.ps1 -RepoPath (Get-Location).Path
 ```
 
 ### Secure Branch Strategy (Recommended)
