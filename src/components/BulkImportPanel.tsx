@@ -144,6 +144,12 @@ export default function BulkImportPanel({
       }
       return "";
     };
+    const formatPlasmidIdDisplayName = (value: string): string => {
+      const compact = String(value || "").trim().replace(/\s+/g, "");
+      const match = compact.match(/^pms(\d{1,4})$/i);
+      if (!match) return "";
+      return `pMS ${match[1].padStart(4, "0")}`;
+    };
 
     // Create tracking maps for dynamic storage creation
     const dynamicUnits: StorageUnit[] = [];
@@ -188,7 +194,10 @@ export default function BulkImportPanel({
       });
 
       // Extract details
-      const chemicalName = sampleMeta.chemicalName || sampleMeta.itemName || `Row #${index + 1} item`;
+      const rawChemicalName = firstNonEmpty(sampleMeta.chemicalName, sampleMeta.itemName);
+      const formattedFromName = formatPlasmidIdDisplayName(rawChemicalName);
+      const formattedFromId = formatPlasmidIdDisplayName(sampleMeta.chemicalId || "");
+      const chemicalName = formattedFromName || rawChemicalName || formattedFromId || `Row #${index + 1} item`;
       const casNumber = sampleMeta.casNumber || "";
       let qty = parseFloat(sampleMeta.qty);
       if (isNaN(qty)) qty = 1;
