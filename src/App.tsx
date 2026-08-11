@@ -149,7 +149,10 @@ export default function App() {
   const [scanInput, setScanInput] = useState("");
   const [isGeneratingQR, setIsGeneratingQR] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return window.innerWidth >= 1280;
+  });
   const [auditSearch, setAuditSearch] = useState("");
   const backupRestoreInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -4998,12 +5001,11 @@ export default function App() {
                   currentBox.rows && currentBox.cols ? (
                     <div className="space-y-6 flex-1 flex flex-col justify-between">
                       {/* Visual Grid Coordinate Container */}
-                      <div className="overflow-auto max-w-full flex justify-center p-2 bg-slate-50 rounded-xl border border-slate-100 shadow-inner">
+                      <div className="overflow-auto w-full p-2 bg-slate-50 rounded-xl border border-slate-100 shadow-inner">
                         <div 
-                          className="grid gap-1.5 p-4 bg-white border border-slate-200 rounded-lg shadow-xs"
+                          className="grid gap-2 p-3 sm:p-4 bg-white border border-slate-200 rounded-lg shadow-xs w-full"
                           style={{
-                            gridTemplateColumns: `repeat(${currentBox.cols}, minmax(44px, 1fr))`,
-                            gridTemplateRows: `repeat(${currentBox.rows}, minmax(44px, 1fr))`
+                            gridTemplateColumns: `repeat(${currentBox.cols}, minmax(0, 1fr))`
                           }}
                         >
                           {Array.from({ length: currentBox.rows }).map((_, rIdx) => {
@@ -5091,7 +5093,7 @@ export default function App() {
                                     }
                                     handleOpenNewSampleAtGridCell(rowNum, colNum);
                                   }}
-                                  className={`relative w-11 h-11 border rounded flex flex-col items-center justify-center cursor-pointer transition-all ${bgClass}`}
+                                  className={`relative aspect-square min-h-[56px] border rounded-md flex flex-col items-center justify-center cursor-pointer transition-all p-1 ${bgClass}`}
                                   title={slotSample ? `${slotSample.chemicalName} (Qty: ${slotSample.qty} ${slotSample.units})${slotSample.expiresOn ? ` | Expires: ${slotSample.expiresOn}` : ""}${isLowStock(slotSample) ? " | LOW STOCK" : ""}` : `Empty slot Row ${rowNum}, Col ${colNum}`}
                                 >
                                   {isSelected && (
@@ -5115,12 +5117,12 @@ export default function App() {
                       </span>
                     );
                   })()}
-                                  <span className="text-[9px] block opacity-60">
+                                  <span className="text-[10px] sm:text-[11px] block opacity-60 font-semibold leading-none">
                                     {String.fromCharCode(64 + rowNum)}{colNum}
                                   </span>
                                   {slotSample && (
-                                    <span className="text-[7px] uppercase tracking-tighter mt-0.5 truncate max-w-full px-0.5 font-sans font-extrabold text-center leading-none">
-                                      {slotSample.qty === 0 ? "EMPTY" : slotSample.chemicalName.substring(0, 5)}
+                                    <span className="text-[9px] sm:text-[10px] mt-1 px-0.5 font-sans font-bold text-center leading-tight line-clamp-2 break-words w-full">
+                                      {slotSample.qty === 0 ? "EMPTY" : slotSample.chemicalName}
                                     </span>
                                   )}
                                 </div>
