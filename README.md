@@ -48,6 +48,7 @@ Runs as a local web app. No database to install — all data is stored in a JSON
 - Paste CSV data directly or upload a spreadsheet. The import auto-creates storage units, shelves, racks, drawers, and boxes from the data — no need to pre-create the storage hierarchy.
 - Maps standard lab inventory spreadsheet headers (chemical name, CAS #, lab, phase, room, location, plasmid name, organism, gene, vector, concentration, volume/mass, expiry date, catalog #, lot, and more).
 - Import summary reports how many samples, storage units, shelves, racks, drawers, and boxes were created.
+- Before each bulk import is applied, the server creates a full point-in-time backup (JSON + Excel). If that backup fails, the bulk import is aborted.
 - Template: [assets/import-templates/freezer-box-sample-import-template.csv](assets/import-templates/freezer-box-sample-import-template.csv)
 
 ### Bulk Move
@@ -190,6 +191,15 @@ The server automatically creates one backup per day (checked on startup and ever
 - Files are written with create-only mode (`wx` flag) — the app cannot overwrite an existing backup.
 - Files are marked read-only (`chmod 444`) after creation.
 - A `manifest.jsonl` file records each backup's filename, creation timestamp, and SHA-256 hash for tamper-evidence.
+
+### Automatic Pre-Bulk-Import Backups
+
+Every `POST /api/bulk-import` request creates a full pre-import backup before any rows are written:
+
+- `inventory-pre-bulk-import-<ISO_TIMESTAMP>.json`
+- `inventory-pre-bulk-import-<ISO_TIMESTAMP>.xlsx`
+
+These files are written to `immutable-backups/`, marked read-only, and added to `manifest.jsonl` with hashes. If backup creation fails, the import is rejected and no data is changed.
 
 ### Manual Backup (any OS)
 
@@ -448,6 +458,6 @@ All endpoints except `/api/auth-config` require the `LAB_PASSPHRASE` Bearer head
 | PATCH | `/api/bulk-move` | Bulk move samples, boxes, drawers, or racks to a new location. |
 | PATCH | `/api/restore` | Restore an archived item (cascading unarchive). |
 | PATCH | `/api/users` | Update the lab member list. |
-| POST | `/api/bulk-import` | Bulk import samples from CSV data. |
+| POST | `/api/bulk-import` | Bulk import samples from CSV data. Creates a mandatory full pre-import backup (JSON + Excel) before applying changes. |
 | GET | `/api/export` | Download full inventory state as JSON. |
 | POST | `/api/import` | Restore database from a JSON backup file. |

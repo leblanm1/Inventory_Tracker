@@ -232,6 +232,61 @@ function scheduleDailyImmutableBackups(): void {
   timer.unref();
 }
 
+function sanitizeBackupLabel(label: string): string {
+  const cleaned = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return cleaned || "backup";
+}
+
+async function createPointInTimeBackup(
+  state: InventoryState,
+  label: string
+): Promise<{ createdAt: string; jsonFile: string; excelFile: string }> {
+  await migrateLegacyDataIfNeeded();
+  if (!existsSync(DATA_DIR)) {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+  }
+  if (!existsSync(IMMUTABLE_BACKUP_DIR)) {
+    await fs.mkdir(IMMUTABLE_BACKUP_DIR, { recursive: true });
+  }
+
+  const now = new Date();
+  const createdAt = now.toISOString();
+  const stamp = createdAt.replace(/[.:]/g, "-");
+  const safeLabel = sanitizeBackupLabel(label);
+  const baseName = `inventory-${safeLabel}-${stamp}`;
+  const jsonPath = path.join(IMMUTABLE_BACKUP_DIR, `${baseName}.json`);
+  const excelPath = path.join(IMMUTABLE_BACKUP_DIR, `${baseName}.xlsx`);
+
+  const normalizedState = normalizeInventoryTimestamps(state);
+  const normalizedContent = JSON.stringify(normalizedState, null, 2);
+  const workbookBuffer = await buildWorkbookBufferFromState(normalizedState);
+
+  await fs.writeFile(jsonPath, normalizedContent, { encoding: "utf-8", flag: "wx" });
+  try {
+    await fs.chmod(jsonPath, 0o444);
+  } catch (chmodErr) {
+    console.warn("Pre-import JSON backup created, but read-only permission could not be applied:", chmodErr);
+  }
+  await appendImmutableBackupManifest(jsonPath, normalizedContent);
+
+  await fs.writeFile(excelPath, workbookBuffer, { flag: "wx" });
+  try {
+    await fs.chmod(excelPath, 0o444);
+  } catch (chmodErr) {
+    console.warn("Pre-import Excel backup created, but read-only permission could not be applied:", chmodErr);
+  }
+  await appendImmutableBackupManifest(excelPath, workbookBuffer);
+
+  return {
+    createdAt,
+    jsonFile: path.basename(jsonPath),
+    excelFile: path.basename(excelPath)
+  };
+}
+
 async function loadSnapshotArchive(): Promise<SnapshotRecord[]> {
   try {
     if (!existsSync(SNAPSHOT_ARCHIVE_FILE)) return [];
@@ -1699,13 +1754,24 @@ async function startServer() {
         res.status(400).json({ error: "Request body must contain a 'samples' array" });
         return;
       }
+
+      let preImportBackup: { createdAt: string; jsonFile: string; excelFile: string };
+      try {
+        const stateBeforeImport = await loadState();
+        preImportBackup = await createPointInTimeBackup(stateBeforeImport, "pre-bulk-import");
+      } catch (backupErr) {
+        console.error("Failed to create pre-import backup. Aborting bulk import:", backupErr);
+        res.status(500).json({ error: "Failed to create pre-import backup. Bulk import was not applied." });
+        return;
+      }
+
       const { clientVersion, user } = getRequestContext(req);
       const boxCount = Array.isArray(body.newBoxes) ? body.newBoxes.length : 0;
       const result = await mutateState(
         clientVersion,
         user,
         "Bulk Import",
-        `Imported ${body.samples.length} sample(s) and ${boxCount} box(es) via CSV.`,
+        `Imported ${body.samples.length} sample(s) and ${boxCount} box(es) via CSV. Pre-import backup: ${preImportBackup.jsonFile}`,
         (state) => {
         // Append new storage hierarchy items (dedup by ID)
         const mergeArrays = <T extends { id: string }>(existing: T[], incoming?: T[]): T[] => {
@@ -1724,7 +1790,7 @@ async function startServer() {
           samples: mergeArrays(state.samples, body.samples)
         };
       });
-      res.json({ success: true, ...result.delta });
+      res.json({ success: true, backup: preImportBackup, ...result.delta });
     } catch (err) {
       if (!handleMutateError(err, res)) {
         res.status(500).json({ error: "Failed to bulk import" });
