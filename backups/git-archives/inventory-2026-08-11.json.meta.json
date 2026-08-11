@@ -1,0 +1,12 @@
+{
+  "sourceFile": "inventory-2026-08-11.json",
+  "createdAt": "2026-08-11T13:00:22.897Z",
+  "sha256Raw": "55db1742209726055d25f11d26dd8c8d74d6d1301842bc520234add290b5cb44",
+  "sha256Gzip": "34e569cd20a71b45491669f471126b941a17d963620c3edf9579a6c0536ad6f4",
+  "rawBytes": 4987137,
+  "gzipBytes": 139957,
+  "chunked": false,
+  "parts": [
+    "inventory-2026-08-11.json.gz"
+  ]
+}
