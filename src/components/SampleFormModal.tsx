@@ -81,6 +81,15 @@ export default function SampleFormModal({
     "g"
   ];
 
+  const SAMPLE_CLASSIFICATIONS = [
+    "chemical",
+    "reagent",
+    "kit",
+    "plasmid",
+    "primer",
+    "protein"
+  ];
+
   const parseMeasurement = (rawValue?: string) => {
     const raw = (rawValue || "").trim();
     if (!raw) return { value: "", unit: "" };
@@ -120,7 +129,7 @@ export default function SampleFormModal({
         units: "vials",
         chemicalName: "",
         casNumber: "",
-        itemType: "Sample",
+        itemType: "",
         notes: "",
         chemicalId: "",
         lab: "Lab Main",
@@ -312,7 +321,7 @@ export default function SampleFormModal({
       qty,
       chemicalName: formData.chemicalName.trim(),
       casNumber: formData.casNumber?.trim() || "",
-      itemType: formData.itemType?.trim() || "Sample",
+      itemType: formData.itemType?.trim() || "",
       concentration: concentrationValue.trim()
         ? `${concentrationValue.trim()} ${concentrationUnit}`.trim()
         : "",
@@ -418,7 +427,7 @@ export default function SampleFormModal({
 
   // Get advanced fields (excluding keys already editable in the basic panel)
   const basicFields: (keyof Sample)[] = [
-    "chemicalName", "casNumber", "qty", "units", "itemType", "concentration", "volumeMass", "antibioticResistance", "notes", "row", "col", "expiresOn"
+    "chemicalName", "casNumber", "catalogNum", "qty", "units", "itemType", "concentration", "volumeMass", "antibioticResistance", "notes", "row", "col", "expiresOn"
   ];
   const advancedFields = ALL_CSV_HEADERS
     .map(h => HEADER_TO_FIELD_MAP[h.toLowerCase().replace(/[^a-z0-9]/g, "")] as keyof Sample)
@@ -512,13 +521,31 @@ export default function SampleFormModal({
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                    Item / Sample Type
+                    Classification (Optional)
+                  </label>
+                  <select
+                    value={formData.itemType || ""}
+                    onChange={e => handleFieldChange("itemType", e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-hidden"
+                  >
+                    <option value="">-- Unspecified --</option>
+                    {SAMPLE_CLASSIFICATIONS.map(option => (
+                      <option key={option} value={option}>
+                        {option.charAt(0).toUpperCase() + option.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                    Manufacturer Part Number
                   </label>
                   <input
                     type="text"
-                    value={formData.itemType || ""}
-                    onChange={e => handleFieldChange("itemType", e.target.value)}
-                    placeholder="e.g. Chemical, Plasmid, Primer, Tissue"
+                    value={formData.catalogNum || ""}
+                    onChange={e => handleFieldChange("catalogNum", e.target.value)}
+                    placeholder="e.g. A5449, 1610406"
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm outline-hidden bg-white"
                   />
                 </div>
