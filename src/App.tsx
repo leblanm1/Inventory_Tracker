@@ -1757,7 +1757,7 @@ export default function App() {
     state.samples.filter(s => !s.isArchived),
     {
       keys: [
-        "chemicalName", "casNumber", "itemType", "notes", "plasmidName",
+        "chemicalId", "chemicalName", "casNumber", "itemType", "notes", "plasmidName",
         "organism", "gene", "primaryDepositedBy", "catalogNum", "lot",
       ],
       threshold: 0.4,
@@ -1795,9 +1795,24 @@ export default function App() {
     const query = searchQuery.trim();
     if (!query) return [];
 
-    const sampleMatches: SearchResult[] = sampleFuse
+    const fuseSampleMatches: SearchResult[] = sampleFuse
       .search(query)
       .map(result => ({ kind: "sample" as const, sample: result.item }));
+
+    const normalizedQuery = query.toLowerCase().replace(/\s+/g, "");
+    const directIdMatches: SearchResult[] = state.samples
+      .filter(s => !s.isArchived)
+      .filter(s => {
+        const normalizedId = (s.chemicalId || "").toLowerCase().replace(/\s+/g, "");
+        return normalizedQuery.length > 0 && normalizedId.includes(normalizedQuery);
+      })
+      .map(sample => ({ kind: "sample" as const, sample }));
+
+    const sampleMatchesById = new Map<string, SearchResult>();
+    [...directIdMatches, ...fuseSampleMatches].forEach(match => {
+      sampleMatchesById.set(match.sample.id, match);
+    });
+    const sampleMatches: SearchResult[] = Array.from(sampleMatchesById.values());
 
     const storageMatches: SearchResult[] = storageFuse
       .search(query)

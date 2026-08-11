@@ -1,0 +1,9 @@
+old_total_rows: 2250
+new_total_rows: 5457
+old_non_plasmid_rows: 2250
+new_non_plasmid_rows: 2355
+non_plasmid_added_rows: 106
+non_plasmid_removed_rows: 1
+added_by_item_type: {'Box': 1, 'Sample': 105}
+removed_by_item_type: {'Box': 1}
+box_change_note: same box name changed fields: Volume/Mass, Notes
