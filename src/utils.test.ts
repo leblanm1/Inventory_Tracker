@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseCSV, escapeCSVCell, convertSamplesToCSV, convertInventoryToCSV, ALL_CSV_HEADERS, HEADER_TO_FIELD_MAP } from "./utils.js";
+import { parseCSV, escapeCSVCell, convertSamplesToCSV, convertInventoryToCSV, syncSamplesToBoxLocation, ALL_CSV_HEADERS, HEADER_TO_FIELD_MAP } from "./utils.js";
 import { Box, Drawer, Rack, Sample, Shelf, StorageUnit } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -226,6 +226,171 @@ describe("convertInventoryToCSV", () => {
     expect(rows[1][itemTypeIdx]).toBe("Box");
     expect(rows[1][boxIdIdx]).toBe("box-1");
     expect(rows[1][boxNameIdx]).toBe("Box A");
+  });
+});
+
+describe("syncSamplesToBoxLocation", () => {
+  it("updates ancestry for samples contained in the moved box", () => {
+    const samples: Sample[] = [
+      {
+        id: "sample-1",
+        storageId: "freezer-2",
+        shelfId: "shelf-2",
+        rackId: "rack-2",
+        drawerId: "drawer-2",
+        boxId: "box-1",
+        row: 1,
+        col: 1,
+        qty: 1,
+        units: "uL",
+        chemicalName: "Sample 1",
+        casNumber: "",
+        itemType: "",
+        notes: "",
+        chemicalId: "",
+        lab: "",
+        phase: "",
+        room: "",
+        location: "",
+        subLocation: "",
+        status: "",
+        plasmidName: "",
+        primaryBox: "",
+        secondaryBox: "",
+        primaryTube: "",
+        secondaryTube: "",
+        primaryDateDeposited: "",
+        secondaryDateDeposited: "",
+        primaryDepositedBy: "",
+        secondaryDepositedBy: "",
+        primaryPrep: "",
+        secondaryPrep: "",
+        primaryRef: "",
+        secondaryRef: "",
+        system: "",
+        organism: "",
+        gene: "",
+        fragmentSize: "",
+        mutations: "",
+        vector: "",
+        markers: "",
+        hosts: "",
+        notebookRef: "",
+        source: "",
+        file: "",
+        freezerIdStr: "",
+        freezerNameStr: "",
+        shelfIdStr: "",
+        shelfNameStr: "",
+        rackIdStr: "",
+        rackName: "",
+        drawerIdStr: "",
+        drawerNameStr: "",
+        categoryId: "",
+        categoryName: "",
+        boxIdStr: "",
+        boxNameStr: "",
+        itemGroupId: "",
+        itemGroupName: "",
+        itemId: "",
+        itemName: "",
+        concentration: "",
+        volumeMass: "",
+        expiresOn: "",
+        createdOn: "",
+        catalogNum: "",
+        packaging: "",
+        price: "",
+        lot: ""
+      },
+      {
+        id: "sample-2",
+        storageId: "freezer-2",
+        shelfId: "shelf-2",
+        rackId: null,
+        drawerId: null,
+        boxId: null,
+        row: null,
+        col: null,
+        qty: 1,
+        units: "uL",
+        chemicalName: "Loose Sample",
+        casNumber: "",
+        itemType: "",
+        notes: "",
+        chemicalId: "",
+        lab: "",
+        phase: "",
+        room: "",
+        location: "",
+        subLocation: "",
+        status: "",
+        plasmidName: "",
+        primaryBox: "",
+        secondaryBox: "",
+        primaryTube: "",
+        secondaryTube: "",
+        primaryDateDeposited: "",
+        secondaryDateDeposited: "",
+        primaryDepositedBy: "",
+        secondaryDepositedBy: "",
+        primaryPrep: "",
+        secondaryPrep: "",
+        primaryRef: "",
+        secondaryRef: "",
+        system: "",
+        organism: "",
+        gene: "",
+        fragmentSize: "",
+        mutations: "",
+        vector: "",
+        markers: "",
+        hosts: "",
+        notebookRef: "",
+        source: "",
+        file: "",
+        freezerIdStr: "",
+        freezerNameStr: "",
+        shelfIdStr: "",
+        shelfNameStr: "",
+        rackIdStr: "",
+        rackName: "",
+        drawerIdStr: "",
+        drawerNameStr: "",
+        categoryId: "",
+        categoryName: "",
+        boxIdStr: "",
+        boxNameStr: "",
+        itemGroupId: "",
+        itemGroupName: "",
+        itemId: "",
+        itemName: "",
+        concentration: "",
+        volumeMass: "",
+        expiresOn: "",
+        createdOn: "",
+        catalogNum: "",
+        packaging: "",
+        price: "",
+        lot: ""
+      }
+    ];
+
+    const updated = syncSamplesToBoxLocation(samples, {
+      id: "box-1",
+      storageId: "freezer-1",
+      shelfId: "shelf-1",
+      rackId: null,
+      drawerId: null
+    });
+
+    expect(updated[0]).toMatchObject({
+      storageId: "freezer-1",
+      shelfId: "shelf-1",
+      rackId: null,
+      drawerId: null
+    });
+    expect(updated[1]).toBe(samples[1]);
   });
 });
 

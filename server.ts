@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import { createServer as createViteServer } from "vite";
 import { InventoryState, StorageUnit, Shelf, Box, Sample, AuditLog, AuditSnapshot, Rack, Drawer } from "./src/types.js";
+import { syncSamplesToBoxLocation } from "./src/utils.js";
 
 // Helper to get directory path
 const __dirname = path.resolve();
@@ -1575,13 +1576,22 @@ async function startServer() {
         : `Added new box "${box.name}".`;
       const result = await mutateState(clientVersion, user, action, desc, (state) => {
         const idx = state.boxes.findIndex(b => b.id === box.id);
+        const existingBox = idx >= 0 ? state.boxes[idx] : null;
         let boxes;
         if (idx >= 0) {
           boxes = state.boxes.map(b => b.id === box.id ? box : b);
         } else {
           boxes = [...state.boxes, box];
         }
-        return { ...state, boxes };
+        const samples = existingBox && (
+          existingBox.storageId !== box.storageId ||
+          existingBox.shelfId !== box.shelfId ||
+          existingBox.rackId !== box.rackId ||
+          existingBox.drawerId !== box.drawerId
+        )
+          ? syncSamplesToBoxLocation(state.samples, box)
+          : state.samples;
+        return { ...state, boxes, samples };
       });
       res.json({ success: true, ...result.delta });
     } catch (err) {
@@ -1610,12 +1620,21 @@ async function startServer() {
       const result = await mutateState(clientVersion, user, action, desc, (state) => {
         const exists = state.boxes.some(b => b.id === id);
         if (!exists) throw { status: 404, message: `Box ${id} not found` };
+        const previousBox = state.boxes.find(b => b.id === id)!;
+        const nextBox = { ...previousBox, ...changes };
         if (isArchive && cascadeArchive) {
-          return cascadeArchiveBox({ ...state, boxes: state.boxes.map(b => b.id === id ? { ...b, ...changes } : b) }, id);
+          return cascadeArchiveBox({ ...state, boxes: state.boxes.map(b => b.id === id ? nextBox : b) }, id);
         }
+        const samples = previousBox.storageId !== nextBox.storageId ||
+          previousBox.shelfId !== nextBox.shelfId ||
+          previousBox.rackId !== nextBox.rackId ||
+          previousBox.drawerId !== nextBox.drawerId
+          ? syncSamplesToBoxLocation(state.samples, nextBox)
+          : state.samples;
         return {
           ...state,
-          boxes: state.boxes.map(b => b.id === id ? { ...b, ...changes } : b)
+          boxes: state.boxes.map(b => b.id === id ? nextBox : b),
+          samples
         };
       });
       res.json({ success: true, ...result.delta });

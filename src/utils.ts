@@ -208,6 +208,20 @@ type InventoryCsvLookups = {
   boxes: Box[];
 };
 
+export function syncSamplesToBoxLocation(samples: Sample[], box: Pick<Box, "id" | "storageId" | "shelfId" | "rackId" | "drawerId">): Sample[] {
+  return samples.map(sample => {
+    if (sample.boxId !== box.id) return sample;
+
+    return {
+      ...sample,
+      storageId: box.storageId,
+      shelfId: box.shelfId,
+      rackId: box.rackId ?? null,
+      drawerId: box.drawerId ?? null
+    };
+  });
+}
+
 function buildSampleCsvRow(sample: Sample, lookups?: InventoryCsvLookups): string[] {
   const storageUnit = lookups?.storageUnits.find(unit => unit.id === sample.storageId);
   const shelf = lookups?.shelves.find(item => item.id === sample.shelfId);

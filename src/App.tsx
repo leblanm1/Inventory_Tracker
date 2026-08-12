@@ -32,7 +32,7 @@ import {
   PanelRightOpen
 } from "lucide-react";
 import { StorageUnit, Shelf, Box, Sample, AuditLog, InventoryState, Rack, Drawer, AuditSnapshot } from "./types.js";
-import { convertInventoryToCSV } from "./utils.js";
+import { convertInventoryToCSV, syncSamplesToBoxLocation } from "./utils.js";
 import { initAuth, authFetch } from "./auth.js";
 import { getExpiryStatus, getExpiryColorClass, getExpiryBadgeClass, getExpiryLabel, getDaysUntilExpiry, isLowStock, getGHSPictograms, GHS_PICTOGRAM_SYMBOLS, GHS_PICTOGRAM_LABELS, checkCompatibility, isIncompatible } from "./labUtils.js";
 import Fuse from "fuse.js";
@@ -2774,6 +2774,17 @@ export default function App() {
     if (boxToSave.id) {
       updatedBoxes = updatedBoxes.map(b => b.id === boxToSave.id ? { ...b, ...boxToSave } as Box : b);
       finalBox = updatedBoxes.find(b => b.id === boxToSave.id) as Box;
+      const boxLocationChanged = state.boxes.some(existingBox =>
+        existingBox.id === finalBox.id && (
+          existingBox.storageId !== finalBox.storageId ||
+          existingBox.shelfId !== finalBox.shelfId ||
+          existingBox.rackId !== finalBox.rackId ||
+          existingBox.drawerId !== finalBox.drawerId
+        )
+      );
+      if (boxLocationChanged) {
+        updatedSamples = syncSamplesToBoxLocation(state.samples, finalBox);
+      }
       logAct = "Box Updated";
       logDesc = `Updated configurations of box "${boxToSave.name}"`;
     } else {
@@ -2792,7 +2803,7 @@ export default function App() {
       { box: finalBox },
       logAct,
       logDesc,
-      { ...state, boxes: updatedBoxes }
+      { ...state, boxes: updatedBoxes, samples: updatedSamples }
     );
     setBoxDefaultDrawerSlot(null);
     setStorageModalOpen(false);
