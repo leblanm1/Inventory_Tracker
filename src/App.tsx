@@ -3446,7 +3446,26 @@ export default function App() {
     let actionName = "";
     let actionDesc = "";
     
-    if (draggedType === "box") {
+    if (draggedType === "sample") {
+      const sample = state.samples.find(s => s.id === draggedId && !s.isArchived);
+      if (!sample || targetType !== "drawer") return;
+
+      const drawer = state.drawers.find(d => d.id === targetId && !d.isArchived);
+      if (!drawer) return;
+
+      updatedSamples = state.samples.map(s => s.id === draggedId ? {
+        ...s,
+        storageId: drawer.storageId,
+        shelfId: drawer.shelfId,
+        rackId: drawer.rackId,
+        drawerId: drawer.id,
+        boxId: null,
+        row: null,
+        col: null
+      } : s);
+      actionName = "Sample Moved to Drawer";
+      actionDesc = `Moved sample "${sample.chemicalName}" into drawer "${drawer.name}"`;
+    } else if (draggedType === "box") {
       const box = state.boxes.find(b => b.id === draggedId);
       if (!box) return;
       
@@ -4415,7 +4434,12 @@ export default function App() {
                                                       }}
                                                       onDragEnd={clearHierarchyDragState}
                                                       onDragOver={(e) => {
-                                                        if (isHierarchyDropAllowed("drawer", drawer.id, rack.id)) {
+                                                        const dragPayload = readDragPayload(e);
+                                                        if (dragPayload?.type === "box") {
+                                                          e.preventDefault();
+                                                          e.dataTransfer.dropEffect = "move";
+                                                          setDragOverHierarchyItem({ type: "drawer", id: drawer.id, parentId: rack.id });
+                                                        } else if (isHierarchyDropAllowed("drawer", drawer.id, rack.id)) {
                                                           e.preventDefault();
                                                           e.dataTransfer.dropEffect = "move";
                                                           setDragOverHierarchyItem({ type: "drawer", id: drawer.id, parentId: rack.id });
@@ -4428,7 +4452,26 @@ export default function App() {
                                                       }}
                                                       onDrop={(e) => {
                                                         e.preventDefault();
-                                                        void handleDropReorderDrawer(drawer.id, rack.id);
+                                                        const dragPayload = readDragPayload(e);
+                                                        if (dragPayload?.type === "box") {
+                                                          const occupiedSlots = new Set(
+                                                            drawerBoxes
+                                                              .filter(box => box.id !== dragPayload.id && typeof box.drawerSlot === "number")
+                                                              .map(box => box.drawerSlot as number)
+                                                          );
+                                                          const availableSlot = Array.from(
+                                                            { length: getDrawerCapacity(drawer) },
+                                                            (_, index) => index + 1
+                                                          ).find(slot => !occupiedSlots.has(slot));
+                                                          if (availableSlot) {
+                                                            void handleDropBoxOnDrawerSlot(e, drawer.id, availableSlot);
+                                                          } else {
+                                                            alert(`Drawer "${drawer.name}" is full.`);
+                                                            clearBoxDragState();
+                                                          }
+                                                        } else {
+                                                          void handleDropReorderDrawer(drawer.id, rack.id);
+                                                        }
                                                       }}
                                                       onClick={(e) => {
                                                         e.stopPropagation();
@@ -5334,11 +5377,9 @@ export default function App() {
                                       <div
                                         key={slotNum}
                                         onDragOver={(e) => {
-                                          if (draggedBoxId) {
-                                            e.preventDefault();
-                                            e.dataTransfer.dropEffect = "move";
-                                            setDragOverDrawerSlot(slotNum);
-                                          }
+                                          e.preventDefault();
+                                          e.dataTransfer.dropEffect = "move";
+                                          setDragOverDrawerSlot(slotNum);
                                         }}
                                         onDragLeave={() => {
                                           if (isSlotDragOver) {
@@ -5560,6 +5601,33 @@ export default function App() {
                               return (
                                 <div
                                   key={drawer.id}
+                                  onDragOver={(e) => {
+                                    e.preventDefault();
+                                    e.dataTransfer.dropEffect = "move";
+                                  }}
+                                  onDrop={(e) => {
+                                    e.preventDefault();
+                                    const dragPayload = readDragPayload(e);
+                                    if (dragPayload?.type === "box") {
+                                      const occupiedSlots = new Set(
+                                        drawerBoxes
+                                          .filter(box => typeof box.drawerSlot === "number")
+                                          .map(box => box.drawerSlot as number)
+                                      );
+                                      const availableSlot = Array.from(
+                                        { length: drawerCapacity },
+                                        (_, index) => index + 1
+                                      ).find(slot => !occupiedSlots.has(slot));
+                                      if (availableSlot) {
+                                        void handleDropBoxOnDrawerSlot(e, drawer.id, availableSlot);
+                                      } else {
+                                        alert(`Drawer "${drawer.name}" is full.`);
+                                        clearBoxDragState();
+                                      }
+                                    } else if (dragPayload?.type === "sample") {
+                                      handleDropMove(e, "drawer", drawer.id);
+                                    }
+                                  }}
                                   onClick={() => setSelectedDrawerId(drawer.id)}
                                   className={`group relative rounded-2xl border bg-white shadow-3xs overflow-hidden transition-all cursor-pointer ${
                                     isDrawerActive ? "border-indigo-300 ring-2 ring-indigo-100" : "border-slate-200 hover:border-indigo-200"
@@ -5704,8 +5772,11 @@ export default function App() {
                                   onClick={() => setSelectedBoxId(box.id)}
                                   draggable={true}
                                   onDragStart={(e) => {
+                                    setDraggedBoxId(box.id);
+                                    e.dataTransfer.effectAllowed = "move";
                                     e.dataTransfer.setData("text/plain", JSON.stringify({ type: "box", id: box.id }));
                                   }}
+                                  onDragEnd={clearBoxDragState}
                                   className="group relative flex flex-col justify-between bg-white hover:bg-indigo-50/10 border border-slate-200 hover:border-indigo-300 rounded-xl p-4 shadow-3xs hover:shadow-xs transition-all duration-200 cursor-pointer h-32 overflow-hidden"
                                 >
                                   <div className="absolute top-0 left-0 bottom-0 w-1 bg-blue-500" />
