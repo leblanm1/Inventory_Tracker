@@ -1653,7 +1653,7 @@ async function startServer() {
       const { itemType, ids, destination } = req.body as {
         itemType: "sample" | "box" | "drawer" | "rack";
         ids: string[];
-        destination: { storageId?: string; shelfId?: string; rackId?: string; drawerId?: string; boxId?: string; shelfCol?: number | null };
+        destination: { storageId?: string; shelfId?: string; rackId?: string; drawerId?: string; boxId?: string; shelfCol?: number | null; drawerSlots?: Record<string, number | null> };
       };
       if (!itemType || !Array.isArray(ids) || ids.length === 0 || !destination) {
         res.status(400).json({ error: "Request body must contain 'itemType', 'ids', and 'destination'" });
@@ -1684,7 +1684,11 @@ async function startServer() {
               storageId: destination.storageId ?? b.storageId,
               shelfId: destination.shelfId ?? b.shelfId,
               rackId: destination.rackId ?? b.rackId,
-              drawerId: destination.drawerId ?? b.drawerId
+              drawerId: destination.drawerId ?? b.drawerId,
+              drawerSlot: destination.drawerSlots && Object.prototype.hasOwnProperty.call(destination.drawerSlots, b.id)
+                ? destination.drawerSlots[b.id]
+                : b.drawerSlot,
+              shelfCol: destination.shelfCol !== undefined ? destination.shelfCol : b.shelfCol
             } : b),
             // Also update samples inside moved boxes
             samples: state.samples.map(s => s.boxId && idSet.has(s.boxId) ? {

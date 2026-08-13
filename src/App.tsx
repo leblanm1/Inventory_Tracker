@@ -2767,6 +2767,7 @@ export default function App() {
     }
 
     let updatedBoxes = [...state.boxes];
+    let updatedSamples = [...state.samples];
     let logAct = "Box Container Created";
     let logDesc = `Created box: ${boxToSave.name}`;
     let finalBox: Box;
@@ -3088,13 +3089,26 @@ export default function App() {
         };
       });
 
-      // Send each moved box via granular API (preserves drawerSlot allocation)
-      const movedBoxes = updatedBoxes.filter(b => bulkSelectedIds.includes(b.id));
-      for (const box of movedBoxes) {
-        await apiMutate("/api/boxes", "PUT", { box }, "Boxes Bulk Relocated",
-          `Moved ${bulkSelectedIds.length} box(es) via bulk action.`,
-          { ...state, boxes: updatedBoxes, samples: updatedSamples });
-      }
+      await apiMutate(
+        "/api/bulk-move",
+        "PATCH",
+        {
+          itemType: "box",
+          ids: [...bulkSelectedIds],
+          destination: {
+            storageId: destination.storageId,
+            shelfId: destination.shelfId,
+            rackId: destination.rackId,
+            drawerId: destination.drawerId,
+            drawerSlots: Object.fromEntries(
+              bulkSelectedIds.map(id => [id, destinationSlotMap.get(id) ?? null])
+            )
+          }
+        },
+        "Boxes Bulk Relocated",
+        `Moved ${bulkSelectedIds.length} box(es) via bulk action.`,
+        { ...state, boxes: updatedBoxes, samples: updatedSamples }
+      );
     }
 
     if (bulkItemType === "drawer") {
@@ -3138,7 +3152,13 @@ export default function App() {
         },
         "Racks Bulk Relocated",
         `Moved ${bulkSelectedIds.length} rack(s) via bulk action.`,
-        { ...state, racks: state.racks.map(r => bulkSelectedIds.includes(r.id) ? { ...r, shelfId: destination.shelfId, storageId: destination.storageId } : r) }
+        {
+          ...state,
+          racks: state.racks.map(r => bulkSelectedIds.includes(r.id) ? { ...r, shelfId: destination.shelfId, storageId: destination.storageId } : r),
+          drawers: state.drawers.map(d => bulkSelectedIds.includes(d.rackId) ? { ...d, shelfId: destination.shelfId, storageId: destination.storageId } : d),
+          boxes: state.boxes.map(b => b.rackId && bulkSelectedIds.includes(b.rackId) ? { ...b, shelfId: destination.shelfId, storageId: destination.storageId } : b),
+          samples: state.samples.map(s => s.rackId && bulkSelectedIds.includes(s.rackId) ? { ...s, shelfId: destination.shelfId, storageId: destination.storageId } : s)
+        }
       );
     }
 
