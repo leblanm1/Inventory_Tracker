@@ -1653,7 +1653,7 @@ async function startServer() {
       const { itemType, ids, destination } = req.body as {
         itemType: "sample" | "box" | "drawer" | "rack";
         ids: string[];
-        destination: { storageId?: string; shelfId?: string; rackId?: string; drawerId?: string; boxId?: string; shelfCol?: number | null; drawerSlots?: Record<string, number | null> };
+        destination: { storageId?: string; shelfId?: string; rackId?: string; drawerId?: string; boxId?: string | null; shelfCol?: number | null; drawerSlots?: Record<string, number | null> };
       };
       if (!itemType || !Array.isArray(ids) || ids.length === 0 || !destination) {
         res.status(400).json({ error: "Request body must contain 'itemType', 'ids', and 'destination'" });
@@ -1673,7 +1673,7 @@ async function startServer() {
               shelfId: destination.shelfId ?? s.shelfId,
               rackId: destination.rackId ?? s.rackId,
               drawerId: destination.drawerId ?? s.drawerId,
-              boxId: destination.boxId ?? s.boxId
+              boxId: destination.boxId !== undefined ? destination.boxId : s.boxId
             } : s)
           };
         } else if (itemType === "box") {

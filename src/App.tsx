@@ -3336,6 +3336,7 @@ export default function App() {
 
   // Drag and Drop implementations for Grid slots
   const handleDragStart = (e: React.DragEvent, sampleId: string) => {
+    e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", sampleId);
     setDraggedSampleId(sampleId);
   };
@@ -3635,6 +3636,7 @@ export default function App() {
                 shelfId: "shelfId" in destEntity ? destEntity.shelfId : undefined,
                 rackId: "rackId" in destEntity ? destEntity.rackId : undefined,
                 drawerId: targetType === "drawer" ? destEntity.id : undefined,
+                boxId: draggedType === "sample" ? null : undefined,
                 shelfCol: targetCol !== undefined ? targetCol : undefined
               }
             },
@@ -5537,7 +5539,10 @@ export default function App() {
                                   key={sample.id}
                                   onClick={() => setSelectedSampleId(sample.id)}
                                   onDoubleClick={() => handleOpenEditSampleModal(sample)}
-                                  className={`p-3 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
+                                  draggable={true}
+                                  onDragStart={(e) => handleDragStart(e, sample.id)}
+                                  onDragEnd={() => setDraggedSampleId(null)}
+                                  className={`p-3 rounded-xl border cursor-grab active:cursor-grabbing transition-all flex flex-col justify-between ${
                                     isSelected 
                                       ? "bg-indigo-600 text-white border-indigo-700 shadow-md scale-[0.99]" 
                                       : "bg-white border-slate-200/70 hover:border-indigo-200 hover:bg-slate-50/50 text-slate-700"
@@ -5865,7 +5870,10 @@ export default function App() {
                                   key={sample.id}
                                   onClick={() => setSelectedSampleId(sample.id)}
                                   onDoubleClick={() => handleOpenEditSampleModal(sample)}
-                                  className={`p-3 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
+                                  draggable={true}
+                                  onDragStart={(e) => handleDragStart(e, sample.id)}
+                                  onDragEnd={() => setDraggedSampleId(null)}
+                                  className={`p-3 rounded-xl border cursor-grab active:cursor-grabbing transition-all flex flex-col justify-between ${
                                     isSelected 
                                       ? "bg-indigo-600 text-white border-indigo-700 shadow-md scale-[0.99]" 
                                       : "bg-white border-slate-200/70 hover:border-indigo-200 hover:bg-slate-50/50 text-slate-700"
