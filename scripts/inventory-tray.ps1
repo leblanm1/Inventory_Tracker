@@ -11,7 +11,13 @@ $resolvedRepoPath = (Resolve-Path $RepoPath).Path
 $mutex = [System.Threading.Mutex]::new($false, "SousaLabInventoryTrackerTray")
 $ownsMutex = $false
 
-if (-not $mutex.WaitOne(0, $false)) {
+try {
+  $ownsMutex = $mutex.WaitOne(0, $false)
+} catch [System.Threading.AbandonedMutexException] {
+  $ownsMutex = $true
+}
+
+if (-not $ownsMutex) {
   Start-Process "http://localhost:$Port"
   exit 0
 }
@@ -57,7 +63,6 @@ function Update-TrayStatus {
 }
 
 try {
-  $ownsMutex = $true
   Start-Tracker
 
   $menu = New-Object System.Windows.Forms.ContextMenuStrip
