@@ -78,7 +78,9 @@ export default function SampleFormModal({
     "nL",
     "ug",
     "mg",
-    "g"
+    "g",
+    "kg",
+    "gallon"
   ];
 
   const SAMPLE_CLASSIFICATIONS = [
