@@ -131,6 +131,17 @@ Open `http://localhost:3000` in your browser.
 >
 > **Install warnings**: You may see `allow-scripts` warnings during install. These are informational and do not prevent a successful install.
 
+### Windows Tray Launcher
+
+The Desktop shortcut starts `scripts/inventory-tray.ps1` through Windows PowerShell. The launcher starts the tracker server in a hidden background process, so no terminal window needs to remain open. A tray icon provides these controls:
+
+- **Open Tracker** — opens the local app at `http://localhost:3000`.
+- **Restart Server** — stops and starts the tracker server.
+- **Stop Server** — stops the tracker server while leaving the tray icon running.
+- **Exit Tray** — closes the tray launcher. It does not remove any data.
+
+The scheduled Windows maintenance tasks use the same tray launcher when they need to start the server. The tray launcher requires Windows PowerShell 5.1, which is included with supported Windows installations.
+
 ### First Run
 
 On first launch, the app creates demo data: 3 storage units (an ultra-low freezer, a refrigerator, and a room-temperature cabinet), 6 shelves, 3 boxes, and a few sample chemicals. Replace this with your real inventory via **bulk import** or clear it by archiving items.

@@ -38,8 +38,9 @@ function Start-InventoryServer {
     [string]$ResolvedRepoPath
   )
 
-  $startArgs = "/c cd /d `"$ResolvedRepoPath`" && npm run dev"
-  Start-Process -FilePath "cmd.exe" -ArgumentList $startArgs -WorkingDirectory $ResolvedRepoPath -WindowStyle Minimized
+  $trayScriptPath = Join-Path $ResolvedRepoPath "scripts\inventory-tray.ps1"
+  $startArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScriptPath`" -RepoPath `"$ResolvedRepoPath`""
+  Start-Process -FilePath "powershell.exe" -ArgumentList $startArgs -WorkingDirectory $ResolvedRepoPath -WindowStyle Hidden
 }
 
 try {
