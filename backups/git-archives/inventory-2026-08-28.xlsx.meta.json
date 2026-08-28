@@ -1,10 +1,10 @@
 {
   "sourceFile": "inventory-2026-08-28.xlsx",
-  "createdAt": "2026-08-28T16:17:23.089Z",
-  "sha256Raw": "f8b63e13d2f03fb0e074944267f5e39848626896ac5863d221f27baace98342a",
-  "sha256Gzip": "5f3084fcdb041dce644550df1952a324bda90d18b767494b79a94393d42f6c02",
-  "rawBytes": 623555,
-  "gzipBytes": 375250,
+  "createdAt": "2026-08-28T16:17:46.306Z",
+  "sha256Raw": "79bfa4a517c07721cd1f5d3f30d88bce35c9ded411c8ec276973f7d9d8def3f3",
+  "sha256Gzip": "97e26378e06a06d4fc164f40f26dac5a2dc0e2fe3763e349cbb90f6c911e5848",
+  "rawBytes": 623556,
+  "gzipBytes": 375252,
   "chunked": false,
   "parts": [
     "inventory-2026-08-28.xlsx.gz"
