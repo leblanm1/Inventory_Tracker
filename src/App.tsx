@@ -161,6 +161,8 @@ export default function App() {
   const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
   const [bulkItemType, setBulkItemType] = useState<"sample" | "box" | "drawer" | "rack">("sample");
   const [bulkSelectedIds, setBulkSelectedIds] = useState<string[]>([]);
+  const [bulkSortField, setBulkSortField] = useState<"name" | "casNumber" | "qty" | "itemType" | "location" | "expiresOn">("name");
+  const [bulkSortDirection, setBulkSortDirection] = useState<"asc" | "desc">("asc");
 
   // Form Modals
   const [sampleModalOpen, setSampleModalOpen] = useState(false);
@@ -263,6 +265,18 @@ export default function App() {
       }
     }
     return parts.join(" > ") || "Unassigned / Loose";
+  };
+
+  const sortLooseSamples = (a: Sample, b: Sample) => {
+    const nameOrder = (a.chemicalName || "").localeCompare(b.chemicalName || "", undefined, {
+      sensitivity: "base",
+      numeric: true
+    });
+    if (nameOrder !== 0) return nameOrder;
+    return (a.casNumber || "").localeCompare(b.casNumber || "", undefined, {
+      sensitivity: "base",
+      numeric: true
+    });
   };
 
   const getSampleConcentrationLabel = (sample: Sample) => {
@@ -1966,6 +1980,23 @@ export default function App() {
       });
   }, [currentViewSamples]);
 
+  const currentUnassignedBoxSamples = useMemo(() => {
+    if (!selectedBoxId) return [];
+    return [...currentViewSamples]
+      .filter(sample => typeof sample.row !== "number" || typeof sample.col !== "number")
+      .sort((a, b) => {
+        const nameOrder = (a.chemicalName || "").localeCompare(b.chemicalName || "", undefined, {
+          sensitivity: "base",
+          numeric: true
+        });
+        if (nameOrder !== 0) return nameOrder;
+        return (a.casNumber || "").localeCompare(b.casNumber || "", undefined, {
+          sensitivity: "base",
+          numeric: true
+        });
+      });
+  }, [currentViewSamples, selectedBoxId]);
+
   useEffect(() => {
     setSelectedGridSampleIds([]);
     setGridSelectionAnchorId(null);
@@ -2875,8 +2906,10 @@ export default function App() {
   };
 
   const bulkSelectableItems = useMemo(() => {
+    const compareText = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+
     if (bulkItemType === "rack") {
-      return state.racks
+      const items = state.racks
         .filter(r => {
           if (r.isArchived) return false;
           if (selectedShelfId) return r.shelfId === selectedShelfId;
@@ -2884,10 +2917,11 @@ export default function App() {
           return true;
         })
         .map(r => ({ id: r.id, label: r.name }));
+      return items.sort((a, b) => bulkSortDirection === "asc" ? compareText(a.label, b.label) : compareText(b.label, a.label));
     }
 
     if (bulkItemType === "drawer") {
-      return state.drawers
+      const items = state.drawers
         .filter(d => {
           if (d.isArchived) return false;
           if (selectedRackId) return d.rackId === selectedRackId;
@@ -2896,10 +2930,11 @@ export default function App() {
           return true;
         })
         .map(d => ({ id: d.id, label: d.name }));
+      return items.sort((a, b) => bulkSortDirection === "asc" ? compareText(a.label, b.label) : compareText(b.label, a.label));
     }
 
     if (bulkItemType === "box") {
-      return state.boxes
+      const items = state.boxes
         .filter(b => {
           if (b.isArchived) return false;
           if (selectedDrawerId) return b.drawerId === selectedDrawerId;
@@ -2909,9 +2944,10 @@ export default function App() {
           return true;
         })
         .map(b => ({ id: b.id, label: b.name }));
+      return items.sort((a, b) => bulkSortDirection === "asc" ? compareText(a.label, b.label) : compareText(b.label, a.label));
     }
 
-    return state.samples
+    const items = state.samples
       .filter(s => {
         if (s.isArchived) return false;
         if (selectedBoxId) return s.boxId === selectedBoxId;
@@ -2921,8 +2957,27 @@ export default function App() {
         if (selectedStorageId) return s.storageId === selectedStorageId;
         return true;
       })
-      .map(s => ({ id: s.id, label: s.chemicalName }));
-  }, [bulkItemType, state.racks, state.drawers, state.boxes, state.samples, selectedStorageId, selectedShelfId, selectedRackId, selectedDrawerId, selectedBoxId]);
+      .map(s => ({
+        id: s.id,
+        label: s.chemicalName,
+        casNumber: s.casNumber || "",
+        qty: Number(s.qty) || 0,
+        itemType: s.itemType || "",
+        location: getSampleLocationPath(s),
+        expiresOn: s.expiresOn || ""
+      }));
+
+    return items.sort((a, b) => {
+      let result = 0;
+      if (bulkSortField === "qty") result = a.qty - b.qty;
+      else if (bulkSortField === "casNumber") result = compareText(a.casNumber, b.casNumber);
+      else if (bulkSortField === "itemType") result = compareText(a.itemType, b.itemType);
+      else if (bulkSortField === "location") result = compareText(a.location, b.location);
+      else if (bulkSortField === "expiresOn") result = compareText(a.expiresOn, b.expiresOn);
+      else result = compareText(a.label, b.label);
+      return bulkSortDirection === "asc" ? result : -result;
+    });
+  }, [bulkItemType, bulkSortField, bulkSortDirection, state.racks, state.drawers, state.boxes, state.samples, selectedStorageId, selectedShelfId, selectedRackId, selectedDrawerId, selectedBoxId]);
 
   useEffect(() => {
     setBulkSelectedIds(prev => prev.filter(id => bulkSelectableItems.some(item => item.id === id)));
@@ -5273,6 +5328,40 @@ export default function App() {
                           <HelpCircle className="h-3 w-3" /> Drag-and-drop a grid sample onto any empty slot to relocate!
                         </p>
                       </div>
+                      {currentUnassignedBoxSamples.length > 0 && (
+                        <div className="space-y-3 pt-4 border-t border-slate-100">
+                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                            Unassigned Box Items ({currentUnassignedBoxSamples.length})
+                          </h4>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 max-h-56 overflow-y-auto pb-2">
+                            {currentUnassignedBoxSamples.map(sample => {
+                              const isSelected = selectedSampleId === sample.id;
+                              return (
+                                <div
+                                  key={sample.id}
+                                  onClick={() => setSelectedSampleId(sample.id)}
+                                  onDoubleClick={() => handleOpenEditSampleModal(sample)}
+                                  className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                                    isSelected
+                                      ? "bg-indigo-600 text-white border-indigo-700 shadow-md"
+                                      : "bg-white border-slate-200/70 hover:border-indigo-200 hover:bg-slate-50/50 text-slate-700"
+                                  }`}
+                                >
+                                  <div className="flex justify-between items-start gap-2">
+                                    <h5 className="font-bold text-xs truncate">{sample.chemicalName}</h5>
+                                    <span className={`text-[9px] uppercase px-1.5 py-0.5 rounded font-extrabold tracking-wider ${isSelected ? "bg-indigo-700/80 text-white" : "bg-slate-100 text-slate-500"}`}>
+                                      {sample.itemType || "Sample"}
+                                    </span>
+                                  </div>
+                                  <p className={`text-[10px] font-mono mt-1 ${isSelected ? "text-indigo-200" : "text-slate-400"}`}>
+                                    {sample.casNumber && `CAS: ${sample.casNumber} • `}Qty: {sample.qty} {sample.units}
+                                  </p>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     /* Free-form box list view */
@@ -5297,7 +5386,7 @@ export default function App() {
                           </div>
                         ) : (
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            {currentViewSamples.map(sample => {
+                            {currentUnassignedBoxSamples.map(sample => {
                               const isSelected = selectedSampleId === sample.id;
                               return (
                                 <div
@@ -5521,7 +5610,7 @@ export default function App() {
                     {(() => {
                       const drawerDirectSamples = state.samples.filter(
                         s => s.drawerId === currentDrawer.id && !s.boxId && !s.isArchived
-                      );
+                      ).sort(sortLooseSamples);
                       if (drawerDirectSamples.length === 0) return null;
                       return (
                         <div className="space-y-3 pt-4 border-t border-slate-100 shrink-0">
@@ -5852,7 +5941,7 @@ export default function App() {
                     {(() => {
                       const rackDirectSamples = state.samples.filter(
                         s => s.rackId === currentRack.id && !s.drawerId && !s.boxId && !s.isArchived
-                      );
+                      ).sort(sortLooseSamples);
                       if (rackDirectSamples.length === 0) return null;
                       return (
                         <div className="space-y-3 pt-4 border-t border-slate-100 shrink-0">
@@ -6715,18 +6804,7 @@ export default function App() {
                               {(() => {
                                 const shelfDirectSamples = state.samples.filter(
                                   s => s.shelfId === currentShelf.id && !s.rackId && !s.drawerId && !s.boxId && !s.isArchived
-                                ).sort((a, b) => {
-                                  const nameOrder = (a.chemicalName || "").localeCompare(
-                                    b.chemicalName || "",
-                                    undefined,
-                                    { sensitivity: "base", numeric: true }
-                                  );
-                                  if (nameOrder !== 0) return nameOrder;
-                                  return (a.casNumber || "").localeCompare(b.casNumber || "", undefined, {
-                                    sensitivity: "base",
-                                    numeric: true
-                                  });
-                                });
+                                ).sort(sortLooseSamples);
                                 if (shelfDirectSamples.length === 0) return null;
                                 return (
                                   <div className="space-y-3 pt-4 border-t border-slate-200 shrink-0">
@@ -7101,7 +7179,7 @@ export default function App() {
                     {(() => {
                       const storageDirectSamples = state.samples.filter(
                         s => s.storageId === currentStorage.id && !s.boxId && !s.isArchived
-                      );
+                      ).sort(sortLooseSamples);
                       if (storageDirectSamples.length === 0) return null;
                       return (
                         <div className="space-y-3 pt-4 border-t border-slate-200 shrink-0">
@@ -7341,6 +7419,7 @@ export default function App() {
                     onChange={(e) => {
                       setBulkItemType(e.target.value as "sample" | "box" | "drawer" | "rack");
                       setBulkSelectedIds([]);
+                      setBulkSortField("name");
                     }}
                     className="w-full px-3 py-2 text-xs font-semibold border border-slate-200 rounded-lg outline-hidden"
                   >
@@ -7356,6 +7435,35 @@ export default function App() {
                   <div className="h-[34px] px-3 flex items-center text-xs font-semibold rounded-lg border border-slate-200 bg-slate-50 text-slate-700">
                     {bulkSelectedIds.length} item(s)
                   </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-slate-400 font-bold mb-1">Sort By</label>
+                  <select
+                    value={bulkSortField}
+                    onChange={(e) => setBulkSortField(e.target.value as typeof bulkSortField)}
+                    className="w-full px-3 py-2 text-xs font-semibold border border-slate-200 rounded-lg outline-hidden"
+                  >
+                    <option value="name">Name</option>
+                    <option value="casNumber" disabled={bulkItemType !== "sample"}>CAS Number</option>
+                    <option value="qty" disabled={bulkItemType !== "sample"}>Quantity</option>
+                    <option value="itemType" disabled={bulkItemType !== "sample"}>Item Type</option>
+                    <option value="location" disabled={bulkItemType !== "sample"}>Location</option>
+                    <option value="expiresOn" disabled={bulkItemType !== "sample"}>Expiration Date</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-slate-400 font-bold mb-1">Order</label>
+                  <select
+                    value={bulkSortDirection}
+                    onChange={(e) => setBulkSortDirection(e.target.value as "asc" | "desc")}
+                    className="w-full px-3 py-2 text-xs font-semibold border border-slate-200 rounded-lg outline-hidden"
+                  >
+                    <option value="asc">Ascending</option>
+                    <option value="desc">Descending</option>
+                  </select>
                 </div>
               </div>
 
