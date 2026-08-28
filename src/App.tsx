@@ -6715,7 +6715,18 @@ export default function App() {
                               {(() => {
                                 const shelfDirectSamples = state.samples.filter(
                                   s => s.shelfId === currentShelf.id && !s.rackId && !s.drawerId && !s.boxId && !s.isArchived
-                                );
+                                ).sort((a, b) => {
+                                  const nameOrder = (a.chemicalName || "").localeCompare(
+                                    b.chemicalName || "",
+                                    undefined,
+                                    { sensitivity: "base", numeric: true }
+                                  );
+                                  if (nameOrder !== 0) return nameOrder;
+                                  return (a.casNumber || "").localeCompare(b.casNumber || "", undefined, {
+                                    sensitivity: "base",
+                                    numeric: true
+                                  });
+                                });
                                 if (shelfDirectSamples.length === 0) return null;
                                 return (
                                   <div className="space-y-3 pt-4 border-t border-slate-200 shrink-0">
