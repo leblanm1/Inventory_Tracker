@@ -3732,7 +3732,7 @@ export default function App() {
   return (
     <div className="w-full min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans overflow-x-hidden selection:bg-indigo-500 selection:text-white">
       {/* Header */}
-      <header className="h-16 bg-white border-b border-slate-200 px-4 lg:px-6 flex items-center justify-between shrink-0 sticky top-0 z-30 shadow-3xs">
+      <header className="h-16 bg-white border-b border-slate-200 px-4 lg:px-6 flex items-center justify-between gap-2 shrink-0 sticky top-0 z-30 shadow-3xs overflow-x-auto">
         <div className="flex items-center gap-2 lg:gap-4 shrink-0">
           {/* Hamburger — mobile only */}
           <button
@@ -3750,7 +3750,7 @@ export default function App() {
         </div>
 
         {/* Global Search with dynamic dropdown suggestion */}
-        <div className="flex-1 max-w-xl px-4 lg:px-10 relative hidden md:block">
+        <div className="flex-1 min-w-[220px] max-w-xl px-4 lg:px-10 relative hidden md:block">
           <div className="relative">
             <div className="absolute inset-y-0 left-3.5 flex items-center pointer-events-none text-slate-400">
               <Search className="w-4 h-4" />
