@@ -113,7 +113,6 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchPanelOpen, setSearchPanelOpen] = useState(false);
   const [searchDetailOpen, setSearchDetailOpen] = useState(false);
   const [searchKindFilters, setSearchKindFilters] = useState<Array<SearchResult["kind"]>>([
     "sample",
@@ -1776,8 +1775,6 @@ export default function App() {
   };
 
   const openDetailedSearch = () => {
-    if (!searchQuery.trim()) return;
-    setSearchPanelOpen(false);
     setSearchDetailOpen(true);
   };
 
@@ -1945,13 +1942,6 @@ export default function App() {
 
     return withDate.map(entry => entry.result);
   }, [searchResults, searchKindFilters, searchDateFrom, searchDateTo, searchSortMode]);
-
-  useEffect(() => {
-    if (!searchQuery.trim()) {
-      setSearchPanelOpen(false);
-      setSearchDetailOpen(false);
-    }
-  }, [searchQuery]);
 
   // Track samples mapped to the currently selected container (Shelf, Rack, Drawer, or Box)
   const currentViewSamples = useMemo(() => {
@@ -3749,8 +3739,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* Global Search with dynamic dropdown suggestion */}
-        <div className="flex-1 min-w-[220px] max-w-xl px-4 lg:px-10 relative hidden md:block">
+        {/* Global Search — focusing the box opens the full detailed results view */}
+        <div className="flex-1 min-w-[220px] max-w-xl px-2 sm:px-4 lg:px-10 relative">
           <div className="relative">
             <div className="absolute inset-y-0 left-3.5 flex items-center pointer-events-none text-slate-400">
               <Search className="w-4 h-4" />
@@ -3758,15 +3748,10 @@ export default function App() {
             <input
               type="text"
               value={searchQuery}
-              onChange={e => {
-                setSearchQuery(e.target.value);
-                if (!searchPanelOpen) setSearchPanelOpen(true);
-              }}
-              onFocus={() => {
-                if (searchQuery.trim()) setSearchPanelOpen(true);
-              }}
+              onChange={e => setSearchQuery(e.target.value)}
+              onFocus={openDetailedSearch}
               onKeyDown={e => {
-                if (e.key === "Enter" && searchQuery.trim()) {
+                if (e.key === "Enter") {
                   e.preventDefault();
                   openDetailedSearch();
                 }
@@ -3776,119 +3761,13 @@ export default function App() {
             />
             {searchQuery && (
               <button
-                onClick={() => {
-                  setSearchQuery("");
-                  setSearchPanelOpen(false);
-                }}
+                onClick={() => setSearchQuery("")}
                 className="absolute inset-y-0 right-3 flex items-center text-slate-400 hover:text-slate-600"
               >
                 <X className="w-4 h-4" />
               </button>
             )}
           </div>
-
-          {/* Search suggestions dropdown */}
-          {searchQuery && searchPanelOpen && (
-            <div className="absolute left-10 right-10 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-64 overflow-y-auto z-20 divide-y divide-slate-100">
-              <div className="p-2 bg-slate-50 text-[10px] uppercase font-bold tracking-wider text-slate-400 flex justify-between">
-                <span>Matching Lab Inventory</span>
-                <span>{searchResults.length} hits</span>
-              </div>
-              {searchResults.length === 0 && (
-                <div className="p-3 text-xs text-slate-500">No matches found for this search term.</div>
-              )}
-              {searchResults.map((result, idx) => {
-                if (result.kind === "sample") {
-                  const s = result.sample;
-                  const parentBoxDetail = state.boxes.find(b => b.id === s.boxId);
-                  const parentShelfDetail = state.shelves.find(sh => sh.id === s.shelfId);
-                  const parentStorageDetail = state.storageUnits.find(u => u.id === s.storageId);
-                  return (
-                    <button
-                      key={`sample-${s.id}`}
-                      onClick={() => {
-                        handleSearchResultClick(result);
-                        setSearchQuery("");
-                        setSearchPanelOpen(false);
-                      }}
-                      className="w-full p-3 text-left hover:bg-slate-50 flex justify-between items-center transition-colors text-xs"
-                    >
-                      <div>
-                        <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                          {s.chemicalName}
-                          <span className="px-1.5 py-0.2 bg-emerald-50 text-[10px] rounded text-emerald-700">Sample</span>
-                          {s.itemType && <span className="px-1.5 py-0.2 bg-slate-100 text-[10px] rounded text-slate-500">{s.itemType}</span>}
-                        </div>
-                        <div className="text-[10px] text-slate-400 mt-0.5 font-mono">
-                          {s.casNumber && `CAS: ${s.casNumber} • `}Qty: {s.qty} {s.units}
-                        </div>
-                      </div>
-                      <div className="text-right text-[10px] text-indigo-600 font-medium">
-                        {parentStorageDetail?.name} &gt; {parentShelfDetail?.name} {parentBoxDetail ? `&gt; ${parentBoxDetail.name}` : ""}
-                      </div>
-                    </button>
-                  );
-                }
-
-                let title = "";
-                let path = "";
-                let kindLabel = "";
-
-                if (result.kind === "storage") {
-                  title = result.storage.name;
-                  path = result.storage.type;
-                  kindLabel = "Storage";
-                } else if (result.kind === "shelf") {
-                  title = result.shelf.name;
-                  path = `${result.storage?.name || ""}`;
-                  kindLabel = "Shelf";
-                } else if (result.kind === "rack") {
-                  title = result.rack.name;
-                  path = `${result.storage?.name || ""} > ${result.shelf?.name || ""}`;
-                  kindLabel = "Rack";
-                } else if (result.kind === "drawer") {
-                  title = result.drawer.name;
-                  path = `${result.storage?.name || ""} > ${result.shelf?.name || ""} > ${result.rack?.name || ""}`;
-                  kindLabel = "Drawer";
-                } else {
-                  title = result.box.name;
-                  const drawerOrRack = result.drawer?.name || result.rack?.name || "";
-                  path = `${result.storage?.name || ""} > ${result.shelf?.name || ""}${drawerOrRack ? ` > ${drawerOrRack}` : ""}`;
-                  kindLabel = "Box";
-                }
-
-                return (
-                  <button
-                    key={`node-${result.kind}-${idx}`}
-                    onClick={() => {
-                      handleSearchResultClick(result);
-                      setSearchQuery("");
-                      setSearchPanelOpen(false);
-                    }}
-                    className="w-full p-3 text-left hover:bg-slate-50 flex justify-between items-center transition-colors text-xs"
-                  >
-                    <div>
-                      <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                        {title}
-                        <span className="px-1.5 py-0.2 bg-indigo-50 text-[10px] rounded text-indigo-700">{kindLabel}</span>
-                      </div>
-                      <div className="text-[10px] text-slate-400 mt-0.5">
-                        {path}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-              <div className="p-2 bg-slate-50">
-                <button
-                  onClick={openDetailedSearch}
-                  className="w-full px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition-colors"
-                >
-                  Open detailed results
-                </button>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Scan / QR Input */}
@@ -4036,19 +3915,43 @@ export default function App() {
         </div>
       </header>
 
-      {searchDetailOpen && searchQuery.trim() && (
+      {searchDetailOpen && (
         <div className="fixed inset-x-0 top-16 bottom-0 z-40 bg-slate-50 border-t border-slate-200 overflow-hidden">
           <div className="h-full flex flex-col">
             <div className="bg-white/95 backdrop-blur border-b border-slate-200 px-4 lg:px-6 py-4 shadow-sm">
               <div className="flex items-start justify-between gap-4">
-                <div>
+                <div className="flex-1 min-w-0">
                   <div className="text-[10px] uppercase tracking-[0.28em] text-indigo-600 font-bold">Detailed Search</div>
-                  <h2 className="mt-1 text-lg font-extrabold text-slate-900">Results for “{searchQuery}”</h2>
-                  <p className="text-xs text-slate-500 mt-1">{detailedSearchResults.length} result(s) after filters</p>
+                  <div className="relative mt-2 max-w-xl">
+                    <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-slate-400">
+                      <Search className="w-4 h-4" />
+                    </div>
+                    <input
+                      type="text"
+                      autoFocus
+                      value={searchQuery}
+                      onChange={e => setSearchQuery(e.target.value)}
+                      placeholder="Search by Chemical ID, CAS, Plasmid, Location, or Lot Number..."
+                      className="w-full bg-slate-100 border-none rounded-lg py-2.5 pl-9 pr-9 text-sm focus:ring-2 focus:ring-indigo-500/20 focus:bg-white transition-all text-slate-800 outline-hidden font-medium placeholder-slate-400"
+                    />
+                    {searchQuery && (
+                      <button
+                        onClick={() => setSearchQuery("")}
+                        className="absolute inset-y-0 right-2.5 flex items-center text-slate-400 hover:text-slate-600"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-2">
+                    {searchQuery.trim()
+                      ? `${detailedSearchResults.length} result(s) after filters`
+                      : "Start typing to search your inventory."}
+                  </p>
                 </div>
                 <button
                   onClick={() => setSearchDetailOpen(false)}
-                  className="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold"
+                  className="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold shrink-0"
                 >
                   Close
                 </button>
@@ -4118,7 +4021,7 @@ export default function App() {
             <div className="flex-1 overflow-y-auto px-4 lg:px-6 py-4">
               {detailedSearchResults.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">
-                  No results matched the selected filters.
+                  {searchQuery.trim() ? "No results matched the selected filters." : "Start typing above to search your inventory."}
                 </div>
               ) : (
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
@@ -4130,7 +4033,6 @@ export default function App() {
                         onClick={() => {
                           handleSearchResultClick(result);
                           setSearchDetailOpen(false);
-                          setSearchPanelOpen(false);
                         }}
                         className="text-left rounded-2xl border border-slate-200 bg-white p-4 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all"
                       >
