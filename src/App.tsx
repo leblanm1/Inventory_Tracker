@@ -147,6 +147,7 @@ export default function App() {
   const [showAuditTrailModal, setShowAuditTrailModal] = useState(false);
   const [scanInput, setScanInput] = useState("");
   const [isGeneratingQR, setIsGeneratingQR] = useState(false);
+  const [scanToolsOpen, setScanToolsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(() => {
     if (typeof window === "undefined") return true;
@@ -3770,35 +3771,54 @@ export default function App() {
           </div>
         </div>
 
-        {/* Scan / QR Input */}
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="relative hidden lg:block">
-            <div className="absolute inset-y-0 left-2.5 flex items-center pointer-events-none text-slate-400">
-              <ScanLine className="w-3.5 h-3.5" />
-            </div>
-            <input
-              type="text"
-              value={scanInput}
-              onChange={e => setScanInput(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  handleScanSubmit();
-                }
-              }}
-              placeholder="Scan / enter Box ID, Sample ID, or CAS..."
-              className="w-48 bg-slate-100 border-none rounded-lg py-2 pl-8 pr-3 text-xs focus:ring-2 focus:ring-indigo-500/20 focus:bg-white transition-all text-slate-800 outline-hidden font-medium placeholder-slate-400"
-            />
-          </div>
+        {/* Scan / QR tools — collapsed behind a single icon since the lab doesn't use them day-to-day */}
+        <div className="relative shrink-0">
           <button
-            onClick={handlePrintQRLables}
-            disabled={isGeneratingQR}
-            className="px-3 py-2 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200/50 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
-            title="Generate printable QR code labels for all boxes"
+            onClick={() => setScanToolsOpen(prev => !prev)}
+            className={`p-2 rounded-lg transition-colors ${
+              scanToolsOpen ? "bg-slate-200 text-slate-800" : "hover:bg-slate-100 text-slate-500"
+            }`}
+            title="Scan / QR tools"
+            aria-label="Toggle scan and QR label tools"
           >
-            <QrCode className="w-3.5 h-3.5" />
-            {isGeneratingQR ? "Generating..." : "QR Labels"}
+            <ScanLine className="w-4 h-4" />
           </button>
+          {scanToolsOpen && (
+            <div className="absolute right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl text-left p-3 z-30 w-56 space-y-2">
+              <div className="relative">
+                <div className="absolute inset-y-0 left-2.5 flex items-center pointer-events-none text-slate-400">
+                  <ScanLine className="w-3.5 h-3.5" />
+                </div>
+                <input
+                  type="text"
+                  autoFocus
+                  value={scanInput}
+                  onChange={e => setScanInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleScanSubmit();
+                      setScanToolsOpen(false);
+                    }
+                  }}
+                  placeholder="Scan / enter Box ID, Sample ID, or CAS..."
+                  className="w-full bg-slate-100 border-none rounded-lg py-2 pl-8 pr-3 text-xs focus:ring-2 focus:ring-indigo-500/20 focus:bg-white transition-all text-slate-800 outline-hidden font-medium placeholder-slate-400"
+                />
+              </div>
+              <button
+                onClick={() => {
+                  handlePrintQRLables();
+                  setScanToolsOpen(false);
+                }}
+                disabled={isGeneratingQR}
+                className="w-full px-3 py-2 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200/50 rounded-lg flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                title="Generate printable QR code labels for all boxes"
+              >
+                <QrCode className="w-3.5 h-3.5" />
+                {isGeneratingQR ? "Generating..." : "QR Labels"}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Action Buttons */}
