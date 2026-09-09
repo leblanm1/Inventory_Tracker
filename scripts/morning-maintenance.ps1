@@ -64,11 +64,14 @@ try {
 
   Write-Host "[$(Get-Date -Format s)] Inventory server not detected. Starting it now..."
   Start-InventoryServer -ResolvedRepoPath $resolvedRepoPath
-  Start-Sleep -Seconds 2
+  $startupDeadline = (Get-Date).AddSeconds(30)
 
-  if (Test-InventoryServerRunning -ResolvedRepoPath $resolvedRepoPath -LocalPort $Port) {
-    Write-Host "[$(Get-Date -Format s)] Inventory server started successfully."
-    exit 0
+  while ((Get-Date) -lt $startupDeadline) {
+    if (Test-InventoryServerRunning -ResolvedRepoPath $resolvedRepoPath -LocalPort $Port) {
+      Write-Host "[$(Get-Date -Format s)] Inventory server started successfully."
+      exit 0
+    }
+    Start-Sleep -Seconds 1
   }
 
   Write-Error "Inventory server did not appear to start. Please check your Node/npm setup and Task Scheduler history."
