@@ -5,7 +5,7 @@ param(
   [string]$FallbackTime = "07:05",
   [string]$MirrorTaskName = "InventoryDailyOneDriveMirror",
   [string]$MirrorTime = "07:10",
-  [string]$OneDriveDestinationPath = "C:\Users\SousaLab\OneDrive - UCB-O365\MAL OneDrive\UCB-O365\Marcelo Carlos Sousa - Sousa_Lab_Files\Invetory_Tracker",
+  [string]$OneDriveDestinationPath = "C:\Users\SousaLab\OneDrive - UCB-O365\MAL OneDrive\UCB-O365\Marcelo Carlos Sousa - Sousa_Lab_Files\Inventory_Tracker",
   [string]$RepoPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 )
 

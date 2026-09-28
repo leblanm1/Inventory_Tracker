@@ -1,6 +1,6 @@
 param(
   [string]$RepoPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
-  [string]$DestinationPath = "C:\Users\SousaLab\OneDrive - UCB-O365\MAL OneDrive\UCB-O365\Marcelo Carlos Sousa - Sousa_Lab_Files\Invetory_Tracker"
+  [string]$DestinationPath = "C:\Users\SousaLab\OneDrive - UCB-O365\MAL OneDrive\UCB-O365\Marcelo Carlos Sousa - Sousa_Lab_Files\Inventory_Tracker"
 )
 
 $ErrorActionPreference = "Stop"
