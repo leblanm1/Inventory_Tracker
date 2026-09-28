@@ -15,6 +15,7 @@ Runs as a local web app. No database to install — all data is stored in a JSON
 - [Backup & Recovery](#backup-recovery)
 - [Restore / Undo — What You Need to Know](#restore-undo-what-you-need-to-know)
 - [Automated Backups + Git (Windows)](#automated-backups-git-windows)
+- [Syncing Changes to the Public Template](#syncing-changes-to-the-public-template)
 - [Production Deployment](#production-deployment)
 - [Testing](#testing)
 - [Tech Stack](#tech-stack)
@@ -346,6 +347,47 @@ Use a dedicated remote branch (e.g., `backup-archives`) and protect it in your G
 4. Enable signed commits if your org requires higher integrity.
 
 > Remote branch protection is configured in GitHub/GitLab/Bitbucket settings and cannot be enforced purely from local code.
+
+---
+
+## Syncing Changes to the Public Template
+
+This lab's inventory tracker (`leblanm1/Inventory_Tracker`) shares its origin with a generalized template repo, [`leblanm1/Public_Inventory_Tracker`](https://github.com/leblanm1/Public_Inventory_Tracker), intended for other labs to adopt. The two repos have **unrelated git histories** and have diverged (this repo has lab-specific automation and real data; the public repo has a first-run setup wizard, no hardcoded users, and Electron packaging). Despite the unrelated histories, `git cherry-pick` can still port individual commits across them since it only needs the diff, not shared ancestry.
+
+### One-time setup
+
+```powershell
+git remote add public https://github.com/leblanm1/Public_Inventory_Tracker.git
+git fetch public
+```
+
+### Porting a change
+
+Do this work in a separate worktree so your live app/data here is never affected:
+
+```powershell
+git worktree add ..\Inventory_Tracker_public-sync -b public-sync/<feature-name> public/main
+cd ..\Inventory_Tracker_public-sync
+git cherry-pick <commit-sha>
+```
+
+Resolve any conflicts (expect them around `DEFAULT_USERS`, `setupComplete`, or lab-specific paths), then validate:
+
+```powershell
+npm install
+npm run lint
+npm test
+```
+
+When it's clean, push the branch to the public repo (or open a PR) and remove the worktree when done:
+
+```powershell
+git push public public-sync/<feature-name>:main
+cd ..\Inventory_Tracker
+git worktree remove ..\Inventory_Tracker_public-sync
+```
+
+Only port commits that are generically useful — skip anything touching real lab data, hardcoded users, or this lab's Windows automation scripts.
 
 ---
 
