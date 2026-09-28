@@ -143,6 +143,7 @@ export interface Sample {
   minStockLevel?: number;         // Reorder threshold
   reorderQty?: number;            // Suggested reorder quantity
   createdAt?: string;
+  createdBy?: string;             // App user who created this sample record
 }
 
 export interface AuditLog {

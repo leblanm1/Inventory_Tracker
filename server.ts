@@ -55,6 +55,12 @@ function stampCreatedAt<T extends { id: string; createdAt?: string }>(entity: T)
   };
 }
 
+/** Stamps a newly created sample with the user who created it, unless already set. */
+function stampSampleCreatedBy(sample: Sample, user: string): Sample {
+  if (sample.createdBy && sample.createdBy.trim()) return sample;
+  return { ...sample, createdBy: user };
+}
+
 function normalizeInventoryTimestamps(state: InventoryState): InventoryState {
   return {
     ...state,
@@ -1170,7 +1176,7 @@ async function startServer() {
             if (index >= 0) {
               updatedSamples[index] = sampleItem;
             } else {
-              updatedSamples.push(sampleItem);
+              updatedSamples.push(stampSampleCreatedBy(sampleItem, user));
             }
           });
           return { ...state, samples: updatedSamples };
@@ -1861,7 +1867,10 @@ async function startServer() {
           racks: mergeArrays(state.racks, body.newRacks),
           drawers: mergeArrays(state.drawers, body.newDrawers),
           boxes: mergeArrays(state.boxes, body.newBoxes),
-          samples: mergeArrays(state.samples, body.samples)
+          samples: mergeArrays(
+            state.samples,
+            body.samples.map(sampleItem => stampSampleCreatedBy(sampleItem, user))
+          )
         };
       });
       void cleanupOldPointInTimeBackups();

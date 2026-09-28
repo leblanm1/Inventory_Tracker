@@ -245,6 +245,13 @@ export default function SampleInspector({
               </div>
             )}
 
+            {inspectedSample.createdBy && (
+              <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
+                <User className="h-3 w-3" />
+                <span>Created by <span className="font-semibold text-slate-600">{inspectedSample.createdBy}</span></span>
+              </div>
+            )}
+
             {/* Micro Actions */}
             <div className="pt-2 grid grid-cols-2 gap-2">
               <button
