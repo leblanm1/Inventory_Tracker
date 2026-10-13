@@ -1,0 +1,12 @@
+{
+  "sourceFile": "inventory-2026-10-13.xlsx",
+  "createdAt": "2026-10-13T13:00:25.516Z",
+  "sha256Raw": "4d26b8c254255a3f0db58c7c7863322bcb8bfbff0ffe2cbac2321db9737e41c3",
+  "sha256Gzip": "d5f7b05bb7f6d4ac79fd593aac487a39a7dbdf3bee7c4babdcb392ad48958652",
+  "rawBytes": 1615382,
+  "gzipBytes": 1167643,
+  "chunked": false,
+  "parts": [
+    "inventory-2026-10-13.xlsx.gz"
+  ]
+}
