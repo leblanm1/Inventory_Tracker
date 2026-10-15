@@ -337,6 +337,21 @@ If you move this repository to a new folder, re-run task registration so Task Sc
 powershell -ExecutionPolicy Bypass -File scripts/register-daily-backup-task.ps1 -RepoPath (Get-Location).Path
 ```
 
+### Dead-Man Server Monitoring (Windows)
+
+The daily heartbeat task checks the tracker at 8:00 AM, scanning the configured port and the next 49 ports for the app, and sends a heartbeat to [Healthchecks.io](https://healthchecks.io/) only when the tracker responds successfully. Healthchecks.io sends the alert if the heartbeat is missed, including when the computer is shut down, asleep, offline, or the scheduled task cannot run. The alert arrives after the check's configured grace period.
+
+1. Create a Healthchecks.io check scheduled for every day at 8:00 AM in the computer's time zone, with an appropriate grace period (for example, 1 hour). Configure its email notification to your address.
+2. In PowerShell, from the repository folder, register the task:
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File scripts/register-server-monitor-task.ps1 -Time 08:00 -Port 3000
+  ```
+
+3. Paste the check's HTTPS ping URL into the secure prompt. It is stored encrypted for the current Windows account under `%LOCALAPPDATA%\SousaLabInventoryTracker` and is not saved in the repository.
+
+The task runs as the current Windows user. If the computer is asleep at 8:00 AM, Task Scheduler starts it when available; the external monitor may alert first if the grace period expires. To change the task time or port, rerun the registration command with the desired `-Time` or `-Port` values. Run `scripts/server-heartbeat.ps1` manually to send a test heartbeat when the tracker is running.
+
 ### Secure Branch Strategy (Recommended)
 
 Use a dedicated remote branch (e.g., `backup-archives`) and protect it in your Git host:
