@@ -45,6 +45,8 @@ if (-not (Test-Path -LiteralPath $pingUrlPath)) {
 $taskArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$heartbeatScriptPath`" -Port $Port"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $taskArgs -WorkingDirectory $resolvedRepoPath
 $trigger = New-ScheduledTaskTrigger -Daily -At $Time
+# An offset-free boundary keeps the task at the same local time across DST changes.
+$trigger.StartBoundary = ([DateTimeOffset]::Parse($trigger.StartBoundary)).LocalDateTime.ToString("s")
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 

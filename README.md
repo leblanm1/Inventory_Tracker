@@ -350,7 +350,7 @@ The daily heartbeat task checks the tracker at 8:00 AM, scanning the configured 
 
 3. Paste the check's HTTPS ping URL into the secure prompt. It is stored encrypted for the current Windows account under `%LOCALAPPDATA%\SousaLabInventoryTracker` and is not saved in the repository.
 
-The task runs as the current Windows user. If the computer is asleep at 8:00 AM, Task Scheduler starts it when available; the external monitor may alert first if the grace period expires. To change the task time or port, rerun the registration command with the desired `-Time` or `-Port` values. Run `scripts/server-heartbeat.ps1` manually to send a test heartbeat when the tracker is running.
+The task runs as the current Windows user and follows local clock time when daylight saving time changes. If the computer is asleep at 8:00 AM, Task Scheduler starts it when available; the external monitor may alert first if the grace period expires. To update an existing task or change its time or port, rerun the registration command with the desired `-Time` or `-Port` values. Run `scripts/server-heartbeat.ps1` manually to send a test heartbeat when the tracker is running.
 
 ### Secure Branch Strategy (Recommended)
 
