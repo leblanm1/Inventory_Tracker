@@ -1,10 +1,10 @@
 {
   "sourceFile": "manifest.jsonl",
-  "createdAt": "2026-11-05T13:00:15.356Z",
-  "sha256Raw": "7d949c5ccb94505268ea21b6b225ac5305a04aa874474b670172be3705189b1a",
-  "sha256Gzip": "88e664da1c6fdc103a7ddc62a84960ec067fe9d1b7a95cab1467f64a1d4aa9d1",
+  "createdAt": "2026-11-06T13:00:14.890Z",
+  "sha256Raw": "a786334ff130b2ce73f3a7c467cecefcb9a7d9a2baaa0aac0ddef320e186b9c6",
+  "sha256Gzip": "af4e465ff7f40de21be7cd04b782b856828d5cab93dcf3ef512b31c2d32a8358",
   "rawBytes": 304,
-  "gzipBytes": 200,
+  "gzipBytes": 201,
   "chunked": false,
   "parts": [
     "manifest.jsonl.gz"
