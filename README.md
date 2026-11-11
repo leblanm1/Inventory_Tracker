@@ -141,7 +141,7 @@ The Desktop shortcut starts `scripts/inventory-tray.ps1` through Windows PowerSh
 - **Stop Server** — stops the tracker server while leaving the tray icon running.
 - **Exit Tray** — closes the tray launcher. It does not remove any data.
 
-The scheduled Windows maintenance tasks use the same tray launcher when they need to start the server. The tray launcher requires Windows PowerShell 5.1, which is included with supported Windows installations.
+Scheduled maintenance starts the server without a tray icon, so it can run when no user is signed in. To use the tray controls after signing in, launch the Desktop shortcut. The tray launcher requires Windows PowerShell 5.1, which is included with supported Windows installations.
 
 ### First Run
 
@@ -308,12 +308,16 @@ Register a daily scheduled task at 7:00 AM:
 powershell -ExecutionPolicy Bypass -File scripts/register-daily-backup-task.ps1 -Time 07:00
 ```
 
+Run registration in Windows PowerShell as the Windows account that normally runs the tracker. Enter that account's **password** in the Windows credential prompt (not its PIN); do not put it in the command line. Task Scheduler stores the credentials to run the tasks whether or not the user is logged on. The account needs permission to log on as a batch job; administrator assistance may be needed. Reregister the tasks if the password changes.
+
 The scheduled task:
 
 1. Runs the immutable backup + git archive push workflow (`npm run backup:git`).
-2. Checks whether the inventory server is already running.
-3. Starts `npm run dev` only if the server is not detected.
+2. Checks for a responding tracker on port 3000 or the next 49 ports.
+3. Starts `npm run dev` without the tray if no tracker or existing tracker process is detected, and waits for a successful response.
 4. A fallback task runs at 7:05 AM in check-only mode to ensure the server is up even if the backup task hangs.
+
+If an existing server process does not respond, the check reports an error rather than starting a second server against the same inventory. Task Scheduler cannot run tasks while the computer is off or asleep; missed tasks are configured to run when available. Git pushes and OneDrive synchronization also require network access, and OneDrive may not sync until its client is running.
 
 Useful parameters:
 
@@ -348,9 +352,9 @@ The daily heartbeat task checks the tracker at 8:00 AM, scanning the configured 
   powershell -ExecutionPolicy Bypass -File scripts/register-server-monitor-task.ps1 -Time 08:00 -Port 3000
   ```
 
-3. Paste the check's HTTPS ping URL into the secure prompt. It is stored encrypted for the current Windows account under `%LOCALAPPDATA%\SousaLabInventoryTracker` and is not saved in the repository.
+3. Paste the check's HTTPS ping URL into the secure prompt if it is not already configured. It is stored encrypted for the current Windows account under `%LOCALAPPDATA%\SousaLabInventoryTracker` and is not saved in the repository. Enter the same Windows account's password in the credential prompt to allow the task to run when signed out.
 
-The task runs as the current Windows user and follows local clock time when daylight saving time changes. If the computer is asleep at 8:00 AM, Task Scheduler starts it when available; the external monitor may alert first if the grace period expires. To update an existing task or change its time or port, rerun the registration command with the desired `-Time` or `-Port` values. Run `scripts/server-heartbeat.ps1` manually to send a test heartbeat when the tracker is running.
+The task runs as the current Windows user, even when signed out, and follows local clock time when daylight saving time changes. If the computer is asleep at 8:00 AM, Task Scheduler starts it when available; the external monitor may alert first if the grace period expires. To update an existing task or change its time or port, rerun the registration command with the desired `-Time` or `-Port` values. Run `scripts/server-heartbeat.ps1` manually to send a test heartbeat when the tracker is running.
 
 ### Secure Branch Strategy (Recommended)
 

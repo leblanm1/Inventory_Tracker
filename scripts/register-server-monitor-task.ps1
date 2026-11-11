@@ -2,7 +2,8 @@ param(
   [string]$TaskName = "InventoryDailyServerHeartbeat",
   [string]$Time = "08:00",
   [int]$Port = 3000,
-  [string]$RepoPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+  [string]$RepoPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
+  [System.Management.Automation.PSCredential]$Credential
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,14 +48,25 @@ $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $taskArgs 
 $trigger = New-ScheduledTaskTrigger -Daily -At $Time
 # An offset-free boundary keeps the task at the same local time across DST changes.
 $trigger.StartBoundary = ([DateTimeOffset]::Parse($trigger.StartBoundary)).LocalDateTime.ToString("s")
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
 try {
-  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+  if (-not $Credential) {
+    $Credential = Get-Credential -UserName ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -Message "Enter the Windows account password for the unattended heartbeat task."
+  }
+  if (-not $Credential -or $Credential.GetNetworkCredential().Password.Length -eq 0) {
+    throw "A Windows account and password are required for the unattended heartbeat task."
+  }
+  if ((New-Object System.Security.Principal.NTAccount($Credential.UserName)).Translate([System.Security.Principal.SecurityIdentifier]) -ne [System.Security.Principal.WindowsIdentity]::GetCurrent().User) {
+    throw "Use the current Windows account: the heartbeat URL is encrypted for that account."
+  }
+  $password = $Credential.GetNetworkCredential().Password
+  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -User $Credential.UserName -Password $password -Settings $settings -Force -ErrorAction Stop | Out-Null
   Write-Host "Scheduled task '$TaskName' created. Runs daily at $Time and checks port $Port."
   Write-Host "Healthchecks.io will alert if a heartbeat is missed. Configure its email notification and daily schedule in your Healthchecks.io account."
 } catch {
   Write-Error "Failed to create scheduled task: $($_.Exception.Message)"
   exit 1
+} finally {
+  $password = $null
 }

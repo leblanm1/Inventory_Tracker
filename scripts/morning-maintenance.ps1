@@ -8,39 +8,46 @@ $ErrorActionPreference = "Stop"
 
 function Test-InventoryServerRunning {
   param(
+    [int]$LocalPort
+  )
+
+  $listenerPorts = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+    Where-Object { $_.LocalPort -ge $LocalPort -and $_.LocalPort -lt ($LocalPort + 50) } |
+    Select-Object -ExpandProperty LocalPort -Unique
+  foreach ($candidatePort in $listenerPorts) {
+    try {
+      $response = Invoke-WebRequest -Uri "http://127.0.0.1:$candidatePort/" -Method Get -TimeoutSec 3 -UseBasicParsing
+      if ($response.Content -match '<title>\s*Lab Inventory Tracker\s*</title>') {
+        return $true
+      }
+    } catch {
+      continue
+    }
+  }
+  return $false
+}
+
+function Start-InventoryServer {
+  param(
     [string]$ResolvedRepoPath,
     [int]$LocalPort
   )
 
-  $repoPattern = [Regex]::Escape($ResolvedRepoPath)
+  $startArgs = "/d /s /c cd /d `"$ResolvedRepoPath`" && set PORT=$LocalPort && npm run dev"
+  Start-Process -FilePath "cmd.exe" -ArgumentList $startArgs -WorkingDirectory $ResolvedRepoPath -WindowStyle Hidden
+}
 
-  $matchingProcess = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+function Test-InventoryServerProcess {
+  param([string]$ResolvedRepoPath)
+
+  $repoPattern = [Regex]::Escape($ResolvedRepoPath)
+  return [bool](Get-CimInstance Win32_Process |
     Where-Object {
       ($_.Name -ieq "node.exe" -or $_.Name -ieq "node") -and
       $_.CommandLine -and
       $_.CommandLine -match $repoPattern -and
       $_.CommandLine -match "server\.ts|dist[\\/]server\.cjs"
-    } |
-    Select-Object -First 1
-
-  if ($matchingProcess) {
-    return $true
-  }
-
-  $portListener = Get-NetTCPConnection -State Listen -LocalPort $LocalPort -ErrorAction SilentlyContinue |
-    Select-Object -First 1
-
-  return [bool]$portListener
-}
-
-function Start-InventoryServer {
-  param(
-    [string]$ResolvedRepoPath
-  )
-
-  $trayScriptPath = Join-Path $ResolvedRepoPath "scripts\inventory-tray.ps1"
-  $startArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScriptPath`" -RepoPath `"$ResolvedRepoPath`""
-  Start-Process -FilePath "powershell.exe" -ArgumentList $startArgs -WorkingDirectory $ResolvedRepoPath -WindowStyle Hidden
+    } | Select-Object -First 1)
 }
 
 try {
@@ -57,24 +64,28 @@ try {
     Write-Host "[$(Get-Date -Format s)] SkipBackup enabled. Running server health check only..."
   }
 
-  if (Test-InventoryServerRunning -ResolvedRepoPath $resolvedRepoPath -LocalPort $Port) {
-    Write-Host "[$(Get-Date -Format s)] Inventory server is already running."
+  if (Test-InventoryServerRunning -LocalPort $Port) {
+    Write-Host "[$(Get-Date -Format s)] Inventory server is responding."
     exit 0
   }
 
-  Write-Host "[$(Get-Date -Format s)] Inventory server not detected. Starting it now..."
-  Start-InventoryServer -ResolvedRepoPath $resolvedRepoPath
-  $startupDeadline = (Get-Date).AddSeconds(30)
+  if (Test-InventoryServerProcess -ResolvedRepoPath $resolvedRepoPath) {
+    Write-Host "[$(Get-Date -Format s)] Inventory server process exists but is not responding. Waiting for it..."
+  } else {
+    Write-Host "[$(Get-Date -Format s)] Inventory server not responding. Starting it now..."
+    Start-InventoryServer -ResolvedRepoPath $resolvedRepoPath -LocalPort $Port
+  }
+  $startupDeadline = (Get-Date).AddSeconds(60)
 
   while ((Get-Date) -lt $startupDeadline) {
-    if (Test-InventoryServerRunning -ResolvedRepoPath $resolvedRepoPath -LocalPort $Port) {
+    if (Test-InventoryServerRunning -LocalPort $Port) {
       Write-Host "[$(Get-Date -Format s)] Inventory server started successfully."
       exit 0
     }
     Start-Sleep -Seconds 1
   }
 
-  Write-Error "Inventory server did not appear to start. Please check your Node/npm setup and Task Scheduler history."
+  Write-Error "Inventory server did not respond. Please check your Node/npm setup and Task Scheduler history."
   exit 1
 } catch {
   Write-Error "Morning maintenance failed: $($_.Exception.Message)"
