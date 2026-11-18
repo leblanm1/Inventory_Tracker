@@ -163,6 +163,7 @@ export default function App() {
   // Bulk selection/actions
   const [bulkSelectOpen, setBulkSelectOpen] = useState(false);
   const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: "sample" | "box" | "drawer" | "rack" | "shelf" | "storage"; id: string } | null>(null);
   const [bulkItemType, setBulkItemType] = useState<"sample" | "box" | "drawer" | "rack">("sample");
   const [bulkSelectedIds, setBulkSelectedIds] = useState<string[]>([]);
   const [bulkSortField, setBulkSortField] = useState<"name" | "casNumber" | "qty" | "itemType" | "location" | "expiresOn">("name");
@@ -2838,6 +2839,72 @@ export default function App() {
     setSampleModalOpen(true);
   };
 
+  const openContextMenu = (e: React.MouseEvent, type: "sample" | "box" | "drawer" | "rack" | "shelf" | "storage", id: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (type === "sample") setSelectedSampleId(id);
+    setContextMenu({ x: e.clientX, y: e.clientY, type, id });
+  };
+
+  const contextMenuLabels = {
+    sample: "Sample",
+    box: "Box",
+    drawer: "Drawer",
+    rack: "Rack",
+    shelf: "Shelf",
+    storage: "Storage Unit"
+  } as const;
+
+  const handleContextMenuEdit = () => {
+    if (!contextMenu) return;
+    if (contextMenu.type === "sample") {
+      const sample = state.samples.find(s => s.id === contextMenu.id);
+      if (sample) handleOpenEditSampleModal(sample);
+    } else {
+      const collections = {
+        box: state.boxes,
+        drawer: state.drawers,
+        rack: state.racks,
+        shelf: state.shelves,
+        storage: state.storageUnits
+      };
+      const item = collections[contextMenu.type].find(i => i.id === contextMenu.id);
+      if (item) {
+        setEditingStorageItem(item);
+        setStorageModalMode(contextMenu.type);
+        setStorageModalOpen(true);
+      }
+    }
+    setContextMenu(null);
+  };
+
+  const handleContextMenuMove = () => {
+    if (!contextMenu || contextMenu.type === "shelf" || contextMenu.type === "storage") return;
+    setBulkItemType(contextMenu.type);
+    setBulkSelectedIds([contextMenu.id]);
+    setBulkSelectOpen(false);
+    setBulkMoveOpen(true);
+    setContextMenu(null);
+  };
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [contextMenu]);
+
   const handleOpenNewBoxModal = (drawerSlot: number | null = null) => {
     if (currentDrawer) {
       setSelectedStorageId(currentDrawer.storageId);
@@ -4136,6 +4203,7 @@ export default function App() {
                 return (
                   <div key={unit.id} className="space-y-0.5">
                     <div
+                      onContextMenu={(e) => openContextMenu(e, "storage", unit.id)}
                       onClick={() => {
                         setSelectedStorageId(unit.id);
                         setSelectedShelfId("");
@@ -4208,6 +4276,7 @@ export default function App() {
                           return (
                             <div key={shelf.id} className="space-y-0.5">
                               <div
+                                onContextMenu={(e) => openContextMenu(e, "shelf", shelf.id)}
                                 draggable
                                 onDragStart={(e) => {
                                   setDraggingHierarchyItem({ type: "shelf", id: shelf.id, parentId: unit.id });
@@ -4307,6 +4376,7 @@ export default function App() {
                                       return (
                                         <div key={rack.id} className="space-y-0.5">
                                           <div
+                                            onContextMenu={(e) => openContextMenu(e, "rack", rack.id)}
                                             draggable
                                             onDragStart={(e) => {
                                               setDraggingHierarchyItem({ type: "rack", id: rack.id, parentId: shelf.id });
@@ -4402,6 +4472,7 @@ export default function App() {
                                                 return (
                                                   <div key={drawer.id} className="space-y-0.5">
                                                     <div
+                                                      onContextMenu={(e) => openContextMenu(e, "drawer", drawer.id)}
                                                       draggable
                                                       onDragStart={(e) => {
                                                         setDraggingHierarchyItem({ type: "drawer", id: drawer.id, parentId: rack.id });
@@ -4539,6 +4610,7 @@ export default function App() {
                                                                 e.stopPropagation();
                                                                 void handleDropReorderBoxesInDrawer(box.id, drawer.id);
                                                               }}
+                                                              onContextMenu={(e) => openContextMenu(e, "box", box.id)}
                                                               onClick={(e) => {
                                                                 e.stopPropagation();
                                                                 setSelectedBoxId(box.id);
@@ -4593,6 +4665,7 @@ export default function App() {
                                                     return (
                                                       <div
                                                         key={box.id}
+                                                        onContextMenu={(e) => openContextMenu(e, "box", box.id)}
                                                         onClick={(e) => {
                                                           e.stopPropagation();
                                                           setSelectedBoxId(box.id);
@@ -4667,6 +4740,7 @@ export default function App() {
                                             e.stopPropagation();
                                             setSelectedBoxId(box.id);
                                           }}
+                                          onContextMenu={(e) => openContextMenu(e, "box", box.id)}
                                           className={`flex items-center justify-between p-1 rounded-sm cursor-pointer transition-colors text-[11px] ${
                                             isBoxActive
                                               ? "bg-indigo-600 text-white font-semibold shadow-xs"
@@ -5177,6 +5251,9 @@ export default function App() {
                                       handleOpenEditSampleModal(slotSample);
                                     }
                                   }}
+                                  onContextMenu={(e) => {
+                                    if (slotSample) openContextMenu(e, "sample", slotSample.id);
+                                  }}
                                   className={`relative aspect-square min-h-[56px] border rounded-md flex flex-col items-center justify-center cursor-pointer transition-all p-1 ${bgClass}`}
                                   title={slotSample ? `${slotSample.chemicalName} (Qty: ${slotSample.qty} ${slotSample.units})${slotSample.expiresOn ? ` | Expires: ${slotSample.expiresOn}` : ""}${isLowStock(slotSample) ? " | LOW STOCK" : ""}` : `Empty slot Row ${rowNum}, Col ${colNum}`}
                                 >
@@ -5259,6 +5336,7 @@ export default function App() {
                                   key={sample.id}
                                   onClick={() => setSelectedSampleId(sample.id)}
                                   onDoubleClick={() => handleOpenEditSampleModal(sample)}
+                                  onContextMenu={(e) => openContextMenu(e, "sample", sample.id)}
                                   className={`p-3 rounded-xl border cursor-pointer transition-all ${
                                     isSelected
                                       ? "bg-indigo-600 text-white border-indigo-700 shadow-md"
@@ -5323,6 +5401,7 @@ export default function App() {
                                   key={sample.id}
                                   onClick={() => setSelectedSampleId(sample.id)}
                                   onDoubleClick={() => handleOpenEditSampleModal(sample)}
+                                  onContextMenu={(e) => openContextMenu(e, "sample", sample.id)}
                                   className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
                                     isSelected 
                                       ? "bg-indigo-600 text-white border-indigo-700 shadow-md scale-[0.99]" 
@@ -5469,6 +5548,7 @@ export default function App() {
                               <div 
                                 key={box.id}
                                 onClick={() => setSelectedBoxId(box.id)}
+                                onContextMenu={(e) => openContextMenu(e, "box", box.id)}
                                 draggable={true}
                                 onDragStart={(e) => {
                                   setDraggedBoxId(box.id);
@@ -5563,6 +5643,7 @@ export default function App() {
                                   key={sample.id}
                                   onClick={() => setSelectedSampleId(sample.id)}
                                   onDoubleClick={() => handleOpenEditSampleModal(sample)}
+                                  onContextMenu={(e) => openContextMenu(e, "sample", sample.id)}
                                   draggable={true}
                                   onDragStart={(e) => handleDragStart(e, sample.id)}
                                   onDragEnd={() => setDraggedSampleId(null)}
@@ -5709,6 +5790,7 @@ export default function App() {
                                               e.dataTransfer.setData("text/plain", JSON.stringify({ type: "box", id: box.id }));
                                             }}
                                             onDragEnd={clearBoxDragState}
+                                            onContextMenu={(e) => openContextMenu(e, "box", box.id)}
                                             onClick={(e) => {
                                               e.stopPropagation();
                                               setSelectedBoxId(box.id);
@@ -5799,6 +5881,7 @@ export default function App() {
                                 <div 
                                   key={box.id}
                                   onClick={() => setSelectedBoxId(box.id)}
+                                  onContextMenu={(e) => openContextMenu(e, "box", box.id)}
                                   draggable={true}
                                   onDragStart={(e) => {
                                     setDraggedBoxId(box.id);
@@ -5894,6 +5977,7 @@ export default function App() {
                                   key={sample.id}
                                   onClick={() => setSelectedSampleId(sample.id)}
                                   onDoubleClick={() => handleOpenEditSampleModal(sample)}
+                                  onContextMenu={(e) => openContextMenu(e, "sample", sample.id)}
                                   draggable={true}
                                   onDragStart={(e) => handleDragStart(e, sample.id)}
                                   onDragEnd={() => setDraggedSampleId(null)}
@@ -6108,6 +6192,7 @@ export default function App() {
                                       key={sample.id} 
                                       onClick={() => setSelectedSampleId(sample.id)}
                                       onDoubleClick={() => handleOpenEditSampleModal(sample)}
+                                      onContextMenu={(e) => openContextMenu(e, "sample", sample.id)}
                                       className={`hover:bg-slate-50/60 cursor-pointer transition-colors ${isSelected ? "bg-indigo-50/40" : ""}`}
                                     >
                                       <td className="py-3 px-4 font-bold text-slate-800">{sample.chemicalName}</td>
@@ -6352,6 +6437,7 @@ export default function App() {
                                                 <div 
                                                   key={item.id}
                                                   onClick={() => setSelectedBoxId(item.id)}
+                                                  onContextMenu={(e) => openContextMenu(e, "box", item.id)}
                                                   className="group relative flex flex-col justify-between bg-white hover:bg-blue-50/10 border border-slate-200 hover:border-blue-400 rounded-lg p-2.5 shadow-3xs cursor-pointer min-h-[96px] overflow-hidden select-none"
                                                 >
                                                   <div className="absolute top-0 left-0 bottom-0 w-1 bg-blue-500" />
@@ -6491,6 +6577,7 @@ export default function App() {
                                         <div 
                                           key={item.id}
                                           onClick={() => setSelectedBoxId(item.id)}
+                                          onContextMenu={(e) => openContextMenu(e, "box", item.id)}
                                           className="group relative flex flex-col justify-between bg-white hover:bg-indigo-50/10 border border-slate-200 hover:border-indigo-300 rounded-xl p-4 shadow-3xs hover:shadow-xs transition-all duration-200 cursor-pointer h-32 overflow-hidden"
                                         >
                                           <div className="absolute top-0 left-0 bottom-0 w-1 bg-blue-500" />
@@ -6662,6 +6749,7 @@ export default function App() {
                                   <div 
                                     key={box.id}
                                     onClick={() => setSelectedBoxId(box.id)}
+                                    onContextMenu={(e) => openContextMenu(e, "box", box.id)}
                                     draggable={true}
                                     onDragStart={(e) => {
                                       e.dataTransfer.setData("text/plain", JSON.stringify({ type: "box", id: box.id }));
@@ -6756,6 +6844,7 @@ export default function App() {
                                           <div
                                             key={sample.id}
                                             onClick={() => setSelectedSampleId(sample.id)}
+                                            onContextMenu={(e) => openContextMenu(e, "sample", sample.id)}
                                             onDoubleClick={() => handleOpenEditSampleModal(sample)}
                                             className={`p-3 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
                                               isSelected 
@@ -6989,6 +7078,7 @@ export default function App() {
                                                 e.dataTransfer.setData("text/plain", JSON.stringify({ type: "box", id: slotBox.id }));
                                               }}
                                               onClick={() => setSelectedBoxId(slotBox.id)}
+                                              onContextMenu={(e) => openContextMenu(e, "box", slotBox.id)}
                                               className="flex flex-col justify-between flex-1 cursor-pointer group/item text-left"
                                             >
                                               <div>
@@ -7079,6 +7169,7 @@ export default function App() {
                                               e.dataTransfer.setData("text/plain", JSON.stringify({ type: "box", id: box.id }));
                                             }}
                                             onClick={() => setSelectedBoxId(box.id)}
+                                            onContextMenu={(e) => openContextMenu(e, "box", box.id)}
                                             className="group/item relative flex flex-col justify-between bg-white hover:bg-blue-50/10 border border-slate-200 hover:border-blue-400 rounded-lg p-3 cursor-pointer w-36 shadow-3xs hover:shadow-2xs transition-all text-left"
                                           >
                                             <div>
@@ -7132,6 +7223,7 @@ export default function App() {
                                 <div
                                   key={sample.id}
                                   onClick={() => setSelectedSampleId(sample.id)}
+                                  onContextMenu={(e) => openContextMenu(e, "sample", sample.id)}
                                   onDoubleClick={() => handleOpenEditSampleModal(sample)}
                                   className={`p-3 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
                                     isSelected 
@@ -7457,6 +7549,27 @@ export default function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {contextMenu && (
+        <div
+          className="fixed z-[100] min-w-[140px] bg-white border border-slate-200 rounded-lg shadow-lg py-1 text-xs font-semibold text-slate-700"
+          style={{
+            left: Math.min(contextMenu.x, window.innerWidth - 160),
+            top: Math.min(contextMenu.y, window.innerHeight - 90)
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <button onClick={handleContextMenuEdit} className="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer">
+            Edit {contextMenuLabels[contextMenu.type]}
+          </button>
+          {contextMenu.type !== "shelf" && contextMenu.type !== "storage" && (
+            <button onClick={handleContextMenuMove} className="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer">
+              Move {contextMenuLabels[contextMenu.type]}
+            </button>
+          )}
         </div>
       )}
 
