@@ -7295,6 +7295,7 @@ export default function App() {
           allSamples={state.samples}
           auditLogs={state.auditLogs}
           locationString={inspectedSample ? getSampleLocationString(inspectedSample) : ""}
+          boxCreatedAt={inspectedSample?.boxId ? state.boxes.find(b => b.id === inspectedSample.boxId)?.createdAt : null}
           onEdit={() => inspectedSample && handleOpenEditSampleModal(inspectedSample)}
           onDeplete={handleDepleteSample}
           onArchive={handleArchiveSample}

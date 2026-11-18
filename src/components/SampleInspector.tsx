@@ -22,6 +22,7 @@ interface SampleInspectorProps {
   allSamples: Sample[];
   auditLogs: AuditLog[];
   locationString: string;
+  boxCreatedAt?: string | null;
   onEdit: () => void;
   onDeplete: (sampleId: string, chemicalName: string) => void;
   onArchive: (sampleId: string, chemicalName: string) => void;
@@ -29,11 +30,24 @@ interface SampleInspectorProps {
   onShowFullTrail: () => void;
 }
 
+// Date-only strings (YYYY-MM-DD) are shown as-is to avoid UTC timezone shifts.
+function formatCreatedDate(value?: string | null): string {
+  const raw = (value || "").trim();
+  if (!raw) return "—";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [y, m, d] = raw.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString();
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? raw : parsed.toLocaleDateString();
+}
+
 export default function SampleInspector({
   inspectedSample,
   allSamples,
   auditLogs,
   locationString,
+  boxCreatedAt,
   onEdit,
   onDeplete,
   onArchive,
@@ -244,6 +258,19 @@ export default function SampleInspector({
                 </p>
               </div>
             )}
+
+            <div className="grid grid-cols-2 gap-3.5">
+              <div>
+                <label className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Sample Created</label>
+                <p className="text-xs font-semibold text-slate-800">
+                  {formatCreatedDate(inspectedSample.createdOn || inspectedSample.createdAt)}
+                </p>
+              </div>
+              <div>
+                <label className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Box Created</label>
+                <p className="text-xs font-semibold text-slate-800">{formatCreatedDate(boxCreatedAt)}</p>
+              </div>
+            </div>
 
             {inspectedSample.createdBy && (
               <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
