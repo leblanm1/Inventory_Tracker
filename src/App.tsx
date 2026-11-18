@@ -5303,8 +5303,20 @@ export default function App() {
                             </button>
                           </div>
                         ) : (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            {currentUnassignedBoxSamples.map(sample => {
+                          <div className="space-y-5">
+                            {[
+                              { key: "placed", title: "Placed Samples", samples: currentGridSamples },
+                              { key: "unplaced", title: "Unplaced Samples", samples: currentUnassignedBoxSamples }
+                            ].map(section => (
+                              <div key={section.key} className="space-y-2">
+                                <h5 className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider">
+                                  {section.title} ({section.samples.length})
+                                </h5>
+                                {section.samples.length === 0 ? (
+                                  <p className="text-[11px] text-slate-400 italic">None</p>
+                                ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            {section.samples.map(sample => {
                               const isSelected = selectedSampleId === sample.id;
                               return (
                                 <div
@@ -5325,6 +5337,7 @@ export default function App() {
                                       </span>
                                     </div>
                                     <p className={`text-[10px] font-mono mt-1 ${isSelected ? "text-indigo-200" : "text-slate-400"}`}>
+                                      {section.key === "placed" && `Row ${sample.row}, Col ${sample.col} • `}
                                       {sample.casNumber && `CAS: ${sample.casNumber} • `}Qty: {sample.qty} {sample.units}
                                     </p>
                                     <p className={`text-[10px] font-mono mt-1 ${isSelected ? "text-indigo-200" : "text-slate-400"}`}>
@@ -5339,6 +5352,10 @@ export default function App() {
                                 </div>
                               );
                             })}
+                            </div>
+                                )}
+                              </div>
+                            ))}
                           </div>
                         )}
                       </div>
